@@ -36,6 +36,8 @@ between separate processes. Docker deployments default
 
 ## Authentication
 
+### PolyTrade users
+
 Exchange an existing PolyTrade email/password login for a one-hour access
 token:
 
@@ -46,6 +48,54 @@ curl -X POST http://localhost:4000/v1/auth/token \
 ```
 
 Use the returned token as `Authorization: Bearer <token>`.
+
+### AssetHero as one trusted application
+
+AssetHero uses a dedicated client credential from its backend:
+
+```text
+AssetHero browser -> AssetHero backend -> PolyTrade API
+```
+
+Never put `ASSETHERO_CLIENT_SECRET`, `JWT_SECRET`, or the resulting access token
+in browser code. A service token can access every thread owned by AssetHero.
+The AssetHero backend must proxy chat requests and keep its mapping from each
+AssetHero user/session to the corresponding PolyTrade `thread_id`.
+
+Configure these values on the PolyTrade API service:
+
+```env
+ASSETHERO_CLIENT_ID=assethero
+ASSETHERO_CLIENT_SECRET=<openssl-rand-hex-32-output>
+SERVICE_TOKEN_TTL_SECONDS=900
+SERVICE_AUTH_RATE_LIMIT_PER_MINUTE=10
+SERVICE_CHAT_RATE_LIMIT_PER_MINUTE=120
+```
+
+Generate the secret once:
+
+```bash
+openssl rand -hex 32
+```
+
+Store the same client ID and client secret only on the AssetHero backend. Do
+not share PolyTrade's `JWT_SECRET` with AssetHero. Exchange the client
+credential using HTTP Basic authentication:
+
+```bash
+curl -X POST https://api.polytrade.chat/v1/auth/service-token \
+  --user "$ASSETHERO_CLIENT_ID:$ASSETHERO_CLIENT_SECRET"
+```
+
+The response contains a chat-only bearer token with a default lifetime of 15
+minutes. Cache it server-side until shortly before `expires_in`, then exchange
+the client credential again. The exchange endpoint rejects browser requests
+that carry an `Origin` header.
+
+Because this flow is server-to-server, `https://assethero.chat` does not need
+to be in `CORS_ORIGINS` unless its browser also makes separate direct requests
+to the PolyTrade API. Direct browser use of the shared AssetHero token is not
+safe.
 
 ## Create a thread
 

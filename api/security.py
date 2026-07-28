@@ -18,7 +18,10 @@ from utils.auth import decode_api_token
 bearer_scheme = HTTPBearer(
     auto_error=False,
     scheme_name="PolyTrade access token",
-    description="Bearer token issued by POST /v1/auth/token",
+    description=(
+        "Bearer token issued by POST /v1/auth/token or "
+        "POST /v1/auth/service-token"
+    ),
 )
 
 
@@ -27,6 +30,8 @@ class Principal:
     user_id: str
     email: str
     scopes: FrozenSet[str]
+    principal_type: str = "user"
+    client_id: str = ""
 
     def require(self, scope: str) -> None:
         if scope not in self.scopes:
@@ -56,6 +61,8 @@ async def require_principal(
         user_id=str(payload["user_id"]),
         email=str(payload.get("email") or ""),
         scopes=frozenset(str(payload.get("scope") or "").split()),
+        principal_type=str(payload.get("principal_type") or "user"),
+        client_id=str(payload.get("client_id") or ""),
     )
 
 
@@ -67,8 +74,16 @@ class SlidingWindowRateLimiter:
         self._lock = asyncio.Lock()
 
     async def check(self, principal: Principal) -> None:
-        limit = max(1, int(os.getenv("CHAT_RATE_LIMIT_PER_MINUTE", "30")))
-        await self.check_key(principal.user_id, limit)
+        if principal.principal_type == "service":
+            limit = max(
+                1,
+                int(os.getenv("SERVICE_CHAT_RATE_LIMIT_PER_MINUTE", "120")),
+            )
+            key = f"service:{principal.client_id or principal.user_id}"
+        else:
+            limit = max(1, int(os.getenv("CHAT_RATE_LIMIT_PER_MINUTE", "30")))
+            key = f"user:{principal.user_id}"
+        await self.check_key(key, limit)
 
     async def check_key(self, key: str, limit: int) -> None:
         cutoff = time.monotonic() - 60

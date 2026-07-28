@@ -45,8 +45,17 @@ Add A records pointing to your Hostinger VPS IP:
    DATABASE_URL=...
    POLYCODE_DB_URL=...
    JWT_SECRET=... # long random value, shared by API and web services
+   ASSETHERO_CLIENT_ID=assethero
+   ASSETHERO_CLIENT_SECRET=... # generate with: openssl rand -hex 32
+   SERVICE_TOKEN_TTL_SECONDS=900
+   SERVICE_AUTH_RATE_LIMIT_PER_MINUTE=10
+   SERVICE_CHAT_RATE_LIMIT_PER_MINUTE=120
    CORS_ORIGINS=https://polytrade.chat,https://www.polytrade.chat,https://app.polytrade.chat
    ```
+
+   Keep `ASSETHERO_CLIENT_SECRET` on the AssetHero backend only. It exchanges
+   that credential at `/v1/auth/service-token`; neither the credential nor the
+   resulting shared service token belongs in browser code.
 
 3. **Configure domains** in Coolify for each service:
    - `api` service → `https://api.polytrade.chat` (port 4000)

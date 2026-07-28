@@ -9,8 +9,8 @@ import os
 import secrets
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict
-from uuid import UUID
+from typing import Dict, Iterable, Optional
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import bcrypt as _bcrypt
 
@@ -194,8 +194,17 @@ def decode_jwt_token(token: str) -> Optional[Dict]:
         return None
 
 
-def create_api_token(user_id: str, email: str, expires_minutes: int = 60) -> str:
-    """Create a scoped access token for the versioned HTTP API."""
+def _create_api_access_token(
+    *,
+    subject: str,
+    user_id: str,
+    email: str,
+    scopes: Iterable[str],
+    expires_seconds: int,
+    principal_type: str,
+    client_id: Optional[str] = None,
+) -> str:
+    """Create a signed, scoped access token for a user or service principal."""
     import jwt
 
     secret = os.getenv("JWT_SECRET")
@@ -205,18 +214,60 @@ def create_api_token(user_id: str, email: str, expires_minutes: int = 60) -> str
     issuer = os.getenv("JWT_ISSUER", "polytrade")
     audience = os.getenv("JWT_AUDIENCE", "polytrade-api")
     payload = {
-        "sub": str(user_id),
+        "sub": subject,
         "user_id": str(user_id),
         "email": email,
+        "principal_type": principal_type,
         "purpose": "api_access",
-        "scope": "chat:read chat:write",
+        "scope": " ".join(sorted(set(scopes))),
         "iss": issuer,
         "aud": audience,
         "jti": secrets.token_urlsafe(24),
         "iat": now,
-        "exp": now + timedelta(minutes=max(1, min(expires_minutes, 1440))),
+        "exp": now + timedelta(seconds=max(60, min(expires_seconds, 86400))),
     }
+    if client_id:
+        payload["client_id"] = client_id
     return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def create_api_token(user_id: str, email: str, expires_minutes: int = 60) -> str:
+    """Create a scoped access token for a PolyTrade end user."""
+    return _create_api_access_token(
+        subject=str(user_id),
+        user_id=str(user_id),
+        email=email,
+        scopes=("chat:read", "chat:write"),
+        expires_seconds=max(1, min(expires_minutes, 1440)) * 60,
+        principal_type="user",
+    )
+
+
+def derive_service_user_id(client_id: str) -> str:
+    """Return the stable UUID used to own one service client's chat data."""
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"https://polytrade.chat/service-principals/{client_id}",
+        )
+    )
+
+
+def create_service_api_token(
+    client_id: str,
+    user_id: str,
+    expires_seconds: int = 900,
+) -> str:
+    """Create a short-lived, chat-only token for a trusted backend service."""
+    return _create_api_access_token(
+        subject=f"service:{client_id}",
+        user_id=str(user_id),
+        email="",
+        scopes=("chat:read", "chat:write"),
+        expires_seconds=max(60, min(expires_seconds, 3600)),
+        principal_type="service",
+        client_id=client_id,
+    )
 
 
 def decode_api_token(token: str) -> Optional[Dict]:
@@ -237,6 +288,11 @@ def decode_api_token(token: str) -> Optional[Dict]:
         if payload.get("purpose") != "api_access":
             return None
         if not payload.get("user_id"):
+            return None
+        principal_type = payload.get("principal_type", "user")
+        if principal_type not in {"user", "service"}:
+            return None
+        if principal_type == "service" and not payload.get("client_id"):
             return None
         return payload
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
