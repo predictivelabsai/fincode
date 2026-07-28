@@ -92,7 +92,7 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
         except Exception:
             user_id_val = None
 
-    await pool.execute(
+    row = await pool.fetchrow(
         """
         INSERT INTO polycode.trades(
             trade_id, run_id, market_id, market_question, trade_side,
@@ -112,6 +112,8 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
             domain      = EXCLUDED.domain,
             user_id     = COALESCE(EXCLUDED.user_id, polycode.trades.user_id),
             updated_at  = NOW()
+        WHERE polycode.trades.user_id IS NOT DISTINCT FROM EXCLUDED.user_id
+        RETURNING trade_id
         """,
         trade.get("trade_id"),
         trade.get("run_id"),
@@ -134,6 +136,8 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
         trade.get("domain", "weather"),
         user_id_val,
     )
+    if not row:
+        raise PermissionError("Trade ID belongs to another user.")
     return trade
 
 
@@ -192,16 +196,24 @@ async def update_trade_status(
     exit_price: Optional[float] = None,
     payout: Optional[float] = None,
     pnl: Optional[float] = None,
-) -> None:
+    user_id: Optional[str] = None,
+) -> bool:
     pool = await get_pool()
-    await pool.execute(
-        """
+    params: List[Any] = [status, exit_price, payout, pnl, trade_id]
+    owner_clause = ""
+    if user_id:
+        from uuid import UUID
+        params.append(UUID(user_id))
+        owner_clause = " AND user_id=$6"
+    result = await pool.execute(
+        f"""
         UPDATE polycode.trades
         SET status=$1, exit_price=$2, payout=$3, pnl=$4, updated_at=NOW()
-        WHERE trade_id=$5
+        WHERE trade_id=$5{owner_clause}
         """,
-        status, exit_price, payout, pnl, trade_id,
+        *params,
     )
+    return not result.endswith("0")
 
 
 async def save_backtest_trades(
@@ -243,7 +255,13 @@ async def save_backtest_trades(
             payout = 0.0
 
         pnl = payout - amount if status == "RESOLVED" else 0.0
-        trade_id = f"BT-{t.get('market_id', 'unk')[:20]}-{t.get('date', '')}"
+        owner_suffix = (
+            str(user_id).replace("-", "")[:12] if user_id else "unowned"
+        )
+        trade_id = (
+            f"BT-{t.get('market_id', 'unk')[:20]}-"
+            f"{t.get('date', '')}-{owner_suffix}"
+        )
 
         await upsert_trade({
             "trade_id": trade_id,

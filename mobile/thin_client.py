@@ -5,8 +5,16 @@ import httpx
 import asyncio
 import json
 import subprocess
+import os
 
-API_URL = "http://127.0.0.1:8000"  # Change to your server IP when running on mobile
+API_URL = os.getenv("POLYTRADE_API_URL", "http://127.0.0.1:4000")
+API_TOKEN = os.getenv("POLYTRADE_API_TOKEN", "")
+
+
+def api_headers() -> dict:
+    if not API_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {API_TOKEN}"}
 
 class ThinTUI(App):
     """A thin client for PolyTrade running on Textual."""
@@ -104,7 +112,11 @@ class ThinTUI(App):
         result_widget = self.query_one("#result", Static)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(f"{API_URL}/weather", json={"city": city, "days": 7})
+                resp = await client.post(
+                    f"{API_URL}/weather",
+                    json={"city": city, "days": 7},
+                    headers=api_headers(),
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     formatted = json.dumps(data, indent=2)
@@ -121,7 +133,11 @@ class ThinTUI(App):
         result_widget = self.query_one("#result", Static)
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:  # Longer timeout for analysis
-                resp = await client.post(f"{API_URL}/predict", json={"city": city, "days": 7, "lookback_days": 7})
+                resp = await client.post(
+                    f"{API_URL}/predict",
+                    json={"city": city, "days": 7, "lookback_days": 7},
+                    headers=api_headers(),
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     formatted = json.dumps(data, indent=2)

@@ -93,6 +93,7 @@ class AgentConfig:
     model_provider: Optional[str] = None
     max_iterations: int = 3
     signal: Optional[Any] = None
+    allow_real_trading: bool = True
 
 
 @dataclass

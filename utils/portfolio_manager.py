@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+from uuid import uuid4
 
 class PortfolioManager:
     """Manages local paper trading portfolio."""
@@ -27,7 +28,7 @@ class PortfolioManager:
     def add_trade(self, market_id: str, question: str, amount: float, price: float):
         """Record a new paper trade."""
         trade = {
-            "id": f"T-{int(datetime.now().timestamp())}",
+            "id": f"T-{uuid4().hex}",
             "timestamp": datetime.now().isoformat(),
             "market_id": market_id,
             "question": question,

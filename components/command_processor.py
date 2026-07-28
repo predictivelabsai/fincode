@@ -1,12 +1,18 @@
 import os
 import sys
 import json
+import asyncio
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
+from uuid import uuid4
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+
+logger = logging.getLogger(__name__)
+
 
 class CommandProcessor:
     """Processes OpenBB-style commands directly for speed (bash-style) or yields to agent."""
@@ -18,8 +24,7 @@ class CommandProcessor:
         self.history: List[str] = []
         self.user_id = user_id
         from utils.portfolio_manager import PortfolioManager
-        from agent.tools.polymarket_tool import get_polymarket_client
-        self.portfolio = PortfolioManager()
+        self.portfolio = None if user_id else PortfolioManager()
         self._pm_client_cache = None
 
     async def process_command(self, user_input: str) -> Tuple[bool, Optional[str]]:
@@ -198,6 +203,15 @@ class CommandProcessor:
                 effective_cmd = cmd
                 effective_args = args
 
+            if effective_cmd in {"poly:buy", "poly:sell", "poly:portfolio"} and not (
+                getattr(self.agent, "allow_real_trading", True)
+            ):
+                self.console.print(
+                    "[red]Real-money trading and wallet access are disabled "
+                    "for this client.[/red]"
+                )
+                return True, None
+
             # Handle poly:backtest
             if effective_cmd == "poly:backtest":
                 if not effective_args:
@@ -273,7 +287,11 @@ class CommandProcessor:
                 domain_arg = domain_filter if domain_filter != "all" else None
                 # Default to backtest if no type specified
                 effective_type = type_filter or "backtest"
-                summary = await get_pnl_summary(domain=domain_arg, trade_type=effective_type)
+                summary = await get_pnl_summary(
+                    domain=domain_arg,
+                    trade_type=effective_type,
+                    user_id=self.user_id,
+                )
                 parts = [domain_filter.upper() if domain_filter != "all" else "ALL"]
                 parts.append(f"{effective_type.upper()} Results")
                 label = " — ".join(parts)
@@ -496,7 +514,22 @@ class CommandProcessor:
                     self.console.print("[red]Error: Market has no valid price.[/red]")
                     return True, None
                 
-                trade = self.portfolio.add_trade(market_id, market.question, amount, price)
+                if self.user_id:
+                    trade = {
+                        "id": f"T-{uuid4().hex}",
+                        "market_id": market_id,
+                        "question": market.question,
+                        "amount": amount,
+                        "entry_price": price,
+                        "shares": amount / price,
+                        "status": "OPEN",
+                        "payout": 0,
+                        "exit_price": None,
+                    }
+                else:
+                    trade = self.portfolio.add_trade(
+                        market_id, market.question, amount, price
+                    )
 
                 # Also save to DB with city and side
                 try:
@@ -526,8 +559,11 @@ class CommandProcessor:
                         "domain": "weather",
                         "user_id": self.user_id,
                     })
-                except Exception as e:
-                    pass  # DB save is best-effort
+                except Exception:
+                    if self.user_id:
+                        logger.exception("Could not save paper trade")
+                        self.console.print("[red]Paper trade could not be saved.[/red]")
+                        return True, None
 
                 self.console.print(Panel(
                     f"Market: {market.question}\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
@@ -543,8 +579,33 @@ class CommandProcessor:
                 
                 trade_id = effective_args[0]
                 
-                # Check if trade exists and is open
-                trades = self.portfolio.get_trades()
+                # Authenticated paper trades live in PostgreSQL so every app sees
+                # the same portfolio. The local file remains a CLI-only fallback.
+                if self.user_id:
+                    from db.repository import get_trades
+
+                    db_trades = await get_trades(
+                        status="OPEN",
+                        limit=500,
+                        trade_type="paper",
+                        user_id=self.user_id,
+                    )
+                    trades = [
+                        {
+                            "id": row["trade_id"],
+                            "market_id": row["market_id"],
+                            "question": row.get("market_question", ""),
+                            "amount": float(row.get("amount", 0) or 0),
+                            "entry_price": float(row.get("entry_price", 0) or 0),
+                            "shares": float(row.get("shares", 0) or 0),
+                            "status": row.get("status", "OPEN"),
+                            "payout": float(row.get("payout", 0) or 0),
+                            "exit_price": row.get("exit_price"),
+                        }
+                        for row in db_trades
+                    ]
+                else:
+                    trades = self.portfolio.get_trades()
                 target_trade = None
                 for t in trades:
                     if t["id"] == trade_id or t["id"].endswith(trade_id):
@@ -570,7 +631,17 @@ class CommandProcessor:
                     return True, None
                 
                 exit_price = market.yes_price
-                closed_trade = self.portfolio.close_trade_by_id(trade_id, exit_price)
+                if self.user_id:
+                    closed_trade = {
+                        **target_trade,
+                        "status": "SOLD",
+                        "exit_price": exit_price,
+                        "payout": target_trade["shares"] * exit_price,
+                    }
+                else:
+                    closed_trade = self.portfolio.close_trade_by_id(
+                        trade_id, exit_price
+                    )
                 
                 if closed_trade:
                     pnl = closed_trade["payout"] - closed_trade["amount"]
@@ -585,6 +656,26 @@ class CommandProcessor:
                         title="[bold yellow]Paper Trade SOLD[/bold yellow]",
                         border_style="yellow"
                     ))
+                    try:
+                        from db.repository import update_trade_status
+
+                        updated = await update_trade_status(
+                            trade_id=closed_trade["id"],
+                            status="SOLD",
+                            exit_price=exit_price,
+                            payout=closed_trade["payout"],
+                            pnl=pnl,
+                            user_id=self.user_id,
+                        )
+                        if self.user_id and not updated:
+                            self.console.print(
+                                "[red]Paper trade no longer exists or is not yours.[/red]"
+                            )
+                    except Exception:
+                        if self.user_id:
+                            self.console.print(
+                                "[red]Paper trade status could not be saved.[/red]"
+                            )
                 return True, None
 
             elif effective_cmd == "poly:paperportfolio":
@@ -593,7 +684,9 @@ class CommandProcessor:
 
             else:
                 self.console.print(f"[red]Unknown Polymarket command: {effective_cmd}[/red]")
-                self.console.print("Available: poly:weather, poly:backtest, poly:buy")
+                self.console.print(
+                    "Available: poly:weather, poly:backtest, poly:simbuy"
+                )
                 return True, None
 
 
@@ -615,7 +708,7 @@ class CommandProcessor:
             elif inspect.iscoroutinefunction(tool.func):
                 return await tool.func(**kwargs)
             else:
-                return tool.func(**kwargs)
+                return await asyncio.to_thread(tool.func, **kwargs)
         except Exception as e:
             return {"error": str(e)}
 
@@ -1226,7 +1319,30 @@ class CommandProcessor:
 
     async def _display_portfolio(self):
         """Display the current paper trading portfolio performance."""
-        trades = self.portfolio.get_trades()
+        if self.user_id:
+            from db.repository import get_trades
+
+            rows = await get_trades(
+                limit=500,
+                trade_type="paper",
+                user_id=self.user_id,
+            )
+            trades = [
+                {
+                    "id": row["trade_id"],
+                    "market_id": row["market_id"],
+                    "question": row.get("market_question", ""),
+                    "amount": float(row.get("amount", 0) or 0),
+                    "entry_price": float(row.get("entry_price", 0) or 0),
+                    "shares": float(row.get("shares", 0) or 0),
+                    "status": row.get("status", "OPEN"),
+                    "payout": float(row.get("payout", 0) or 0),
+                    "exit_price": row.get("exit_price"),
+                }
+                for row in rows
+            ]
+        else:
+            trades = self.portfolio.get_trades()
         if not trades:
             self.console.print("[yellow]Your portfolio is empty. Use poly:paperbuy to start trading![/yellow]")
             return
@@ -1303,8 +1419,17 @@ class CommandProcessor:
         from db.repository import get_trades, get_pnl_summary
 
         domain_arg = domain if domain != "all" else None
-        trades = await get_trades(limit=50, domain=domain_arg, trade_type=trade_type)
-        summary = await get_pnl_summary(domain=domain_arg, trade_type=trade_type)
+        trades = await get_trades(
+            limit=50,
+            domain=domain_arg,
+            trade_type=trade_type,
+            user_id=self.user_id,
+        )
+        summary = await get_pnl_summary(
+            domain=domain_arg,
+            trade_type=trade_type,
+            user_id=self.user_id,
+        )
 
         parts = []
         if domain != "all":

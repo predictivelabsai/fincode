@@ -75,6 +75,7 @@ class Agent:
         self.tool_map = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
         self.signal = config.signal
+        self.allow_real_trading = config.allow_real_trading
         self.llm = LLMProvider.get_model(self.model, self.model_provider)
         self.graph = self._build_graph()
 
@@ -277,7 +278,10 @@ class Agent:
 
         if tomorrow_api_key:
             pm_client = PolymarketClient(api_key=pm_api_key)
-            clob_client = PolymarketCLOBClient(key=pm_private_key)
+            clob_client = PolymarketCLOBClient(
+                key=pm_private_key,
+                read_only=not config.allow_real_trading,
+            )
             weather_client = WeatherClient(api_key=tomorrow_api_key)
             pm_wrapper = PolymarketWrapper(pm_client, clob_client, weather_client)
 
@@ -298,15 +302,16 @@ class Agent:
                     args_schema=None,
                 )
             )
-            tools.append(
-                StructuredTool(
-                    name="place_real_order",
-                    description="Place a REAL order on Polymarket. Parameters: amount (USDC), token_id (CLOB Token ID), side (optional, 'BUY' or 'SELL').",
-                    func=_make_sync(pm_client.create_order),
-                    coroutine=pm_client.create_order,
-                    args_schema=None,
+            if config.allow_real_trading:
+                tools.append(
+                    StructuredTool(
+                        name="place_real_order",
+                        description="Place a REAL order on Polymarket. Parameters: amount (USDC), token_id (CLOB Token ID), side (optional, 'BUY' or 'SELL').",
+                        func=_make_sync(pm_client.create_order),
+                        coroutine=pm_client.create_order,
+                        args_schema=None,
+                    )
                 )
-            )
             tools.append(
                 StructuredTool(
                     name="simulate_polymarket_trade",

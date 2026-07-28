@@ -49,7 +49,7 @@ Final Answer Synthesis
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.11+ (Docker images use Python 3.12)
 - API Keys:
   - **XAI API Key** (required for Grok models)
   - OpenAI API Key (optional, for GPT models)
@@ -122,6 +122,14 @@ Or run tests:
 python3 tests/test_xai_integration.py
 ```
 
+### Shared chat API
+
+The existing AG-UI window and external chat clients use the same canonical
+research backend. The authenticated API supports durable threads, JSON
+responses, and SSE streaming on port 4000.
+
+See [docs/chat_api.md](docs/chat_api.md) for setup and client examples.
+
 ## Example Queries
 
 Try asking PolyCode questions like:
@@ -145,7 +153,7 @@ The CLI supports fast, "bash-style" direct commands that bypass the AI agent for
 | `quote [ticker]` | Quick market data snapshot | **Instant** |
 | `poly:weather [city]` | Search Polymarket weather markets by city/keyword | **Instant** |
 | `poly:backtest [type] [period]` | Run real-data backtest on weather markets | Slow |
-| `poly:buy <amt> <id>` | Simulate CLOB trade for a market | **Instant** |
+| `poly:simbuy <amt> <id>` | Simulate CLOB price and slippage | **Instant** |
 | `reset`, `r`, `..` | Reset context/ticker | - |
 | `help`, `h`, `?` | Displays help menu | - |
 | `cls` | Clear screen | - |
@@ -179,7 +187,7 @@ poly:weather "temperature New York"
 poly:weather     # Shows all weather opportunities
 
 # Simulated trading
-poly:buy 50 market_token_id_here
+poly:simbuy 50 market_token_id_here
 ```
 
 > [!TIP]

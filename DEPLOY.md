@@ -44,6 +44,8 @@ Add A records pointing to your Hostinger VPS IP:
    VISUAL_CROSSING_API_KEY=...
    DATABASE_URL=...
    POLYCODE_DB_URL=...
+   JWT_SECRET=... # long random value, shared by API and web services
+   CORS_ORIGINS=https://polytrade.chat,https://www.polytrade.chat,https://app.polytrade.chat
    ```
 
 3. **Configure domains** in Coolify for each service:
@@ -63,11 +65,12 @@ curl https://api.polytrade.chat/health
 curl https://app.polytrade.chat/health
 curl https://polytrade.chat/health
 
-# Test API
-curl -X POST https://api.polytrade.chat/agent/run \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What is AAPL stock price?"}'
+# Obtain an API token, create a thread, then use /v1/threads/{id}/messages.
+# Full examples: docs/chat_api.md
 ```
+
+Apply `db/migrations/001_shared_chat_api.sql` before the first deployment that
+uses the shared chat API.
 
 ## Local Testing
 

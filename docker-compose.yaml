@@ -22,8 +22,21 @@ services:
       - VISUAL_CROSSING_API_KEY=${VISUAL_CROSSING_API_KEY:-}
       - DATABASE_URL=${DATABASE_URL:-}
       - POLYCODE_DB_URL=${POLYCODE_DB_URL:-}
+      - CHAT_REQUIRE_DATABASE=${CHAT_REQUIRE_DATABASE:-true}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - JWT_ISSUER=${JWT_ISSUER:-polytrade}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-polytrade-api}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:4002,http://localhost:4003}
+      - CHAT_MAX_MESSAGE_CHARS=${CHAT_MAX_MESSAGE_CHARS:-20000}
+      - CHAT_MAX_HISTORY_MESSAGES=${CHAT_MAX_HISTORY_MESSAGES:-50}
+      - CHAT_MAX_CONCURRENT_RUNS=${CHAT_MAX_CONCURRENT_RUNS:-8}
+      - CHAT_RUN_TIMEOUT_SECONDS=${CHAT_RUN_TIMEOUT_SECONDS:-300}
+      - CHAT_STALE_RUN_SECONDS=${CHAT_STALE_RUN_SECONDS:-600}
+      - CHAT_RATE_LIMIT_PER_MINUTE=${CHAT_RATE_LIMIT_PER_MINUTE:-30}
+      - AUTH_RATE_LIMIT_PER_MINUTE=${AUTH_RATE_LIMIT_PER_MINUTE:-10}
+      - CHAT_SSE_HEARTBEAT_SECONDS=${CHAT_SSE_HEARTBEAT_SECONDS:-15}
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:4000/health')"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:4000/health').raise_for_status()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -53,6 +66,8 @@ services:
       - VISUAL_CROSSING_API_KEY=${VISUAL_CROSSING_API_KEY:-}
       - DATABASE_URL=${DATABASE_URL:-}
       - POLYCODE_DB_URL=${POLYCODE_DB_URL:-}
+      - CHAT_REQUIRE_DATABASE=${CHAT_REQUIRE_DATABASE:-true}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
     depends_on:
       api:
         condition: service_healthy
@@ -87,6 +102,13 @@ services:
       - VISUAL_CROSSING_API_KEY=${VISUAL_CROSSING_API_KEY:-}
       - DATABASE_URL=${DATABASE_URL:-}
       - POLYCODE_DB_URL=${POLYCODE_DB_URL:-}
+      - CHAT_REQUIRE_DATABASE=${CHAT_REQUIRE_DATABASE:-true}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - CHAT_MAX_MESSAGE_CHARS=${CHAT_MAX_MESSAGE_CHARS:-20000}
+      - CHAT_MAX_HISTORY_MESSAGES=${CHAT_MAX_HISTORY_MESSAGES:-50}
+      - CHAT_MAX_CONCURRENT_RUNS=${CHAT_MAX_CONCURRENT_RUNS:-8}
+      - CHAT_RUN_TIMEOUT_SECONDS=${CHAT_RUN_TIMEOUT_SECONDS:-300}
+      - CHAT_STALE_RUN_SECONDS=${CHAT_STALE_RUN_SECONDS:-600}
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:4003/')"]
       interval: 30s

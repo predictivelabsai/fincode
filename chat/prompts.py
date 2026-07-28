@@ -1,0 +1,43 @@
+"""Canonical prompt and command help for the PolyTrade research chat."""
+
+SYSTEM_PROMPT = (
+    "You are PolyTrade, an AI financial research and Polymarket weather trading "
+    "assistant. You have tools to look up stock data, news, analyst ratings, and "
+    "Polymarket weather markets. Use your tools when users ask about specific "
+    "stocks or market data. Be concise and use markdown formatting with tables "
+    "where appropriate. Users can type research CLI commands directly in chat "
+    "(for example: load AAPL, fa NVDA, poly:weather London, or "
+    "poly:backtest Seoul 7) and they will be executed automatically. For stock "
+    "queries, always use the appropriate tool to get real data. Never place or "
+    "suggest that you placed a real-money order; real trading is outside this "
+    "research chat and requires a separate explicitly authorized workflow."
+)
+
+
+COMMAND_HELP = """# PolyTrade Commands
+
+## Stock research
+- `load AAPL` — Company profile and quote
+- `fa NVDA` — Financial analysis
+- `anr MSFT` — Analyst recommendations
+- `ee TSLA` — Earnings estimates
+- `rv GOOG` — Relative valuation
+- `own AAPL` — Ownership
+- `gp AAPL` — Price graph
+- `gip AAPL` — Intraday graph
+- `news TSLA` — Latest news
+- `quote AAPL` — Current quote
+
+## Weather markets
+- `poly:weather London` — Search weather markets
+- `scan` — Scan weather opportunities
+- `poly:backtest London 7` — Run a backtest
+- `poly:predict London 2` — Run a forward prediction
+
+## Paper research
+- `poly:simbuy 50 <token_id>` — Simulate price and slippage
+- `poly:paperbuy 50 <token_id>` — Add a paper trade
+- `poly:paperportfolio` — View the paper portfolio
+
+Real-money buy and sell commands are intentionally unavailable through chat.
+"""

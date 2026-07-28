@@ -1,0 +1,133 @@
+# Shared Chat API
+
+Both the existing AG-UI window and external clients use the same backend in
+`chat/service.py`. The HTTP API is stateful: the server owns conversation
+history, model configuration, tools, persistence, and user isolation.
+
+## Setup
+
+1. Configure `JWT_SECRET`, the model/provider keys, and a PostgreSQL URL.
+2. Apply the chat migration:
+
+   ```bash
+   psql "$POLYCODE_DB_URL" -f db/migrations/001_shared_chat_api.sql
+   ```
+
+   A fresh installation can instead run:
+
+   ```bash
+   python scripts/setup_polycode_db.py
+   ```
+
+3. Start the API on port 4000:
+
+   ```bash
+   python api/main.py
+   ```
+
+FastAPI documentation is available at `http://localhost:4000/docs`.
+`GET /health` returns `503` when the configured database is unreachable or the
+chat migration has not been applied.
+
+If neither `POLYCODE_DB_URL` nor `DATABASE_URL` is set, chat uses an in-memory
+development store. That mode is not durable and cannot share conversations
+between separate processes. Docker deployments default
+`CHAT_REQUIRE_DATABASE=true` and fail fast instead of silently using memory.
+
+## Authentication
+
+Exchange an existing PolyTrade email/password login for a one-hour access
+token:
+
+```bash
+curl -X POST http://localhost:4000/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"your-password"}'
+```
+
+Use the returned token as `Authorization: Bearer <token>`.
+
+## Create a thread
+
+```bash
+curl -X POST http://localhost:4000/v1/threads \
+  -H "Authorization: Bearer $POLYTRADE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"NVDA research"}'
+```
+
+The authenticated user owns the returned `thread_id`. A different user
+receives a not-found response even if they know that ID.
+
+## Send a non-streaming message
+
+```bash
+curl -X POST http://localhost:4000/v1/threads/THREAD_ID/messages \
+  -H "Authorization: Bearer $POLYTRADE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 7e447b3e-14c3-4ef4-ae47-c473c631eab2' \
+  -d '{"content":"Analyse the current NVDA outlook","stream":false}'
+```
+
+Do not send chat history, model names, provider names, user IDs, tool lists, or
+system prompts. The server controls those values and loads the thread history.
+
+## Stream a response
+
+```bash
+curl -N -X POST http://localhost:4000/v1/threads/THREAD_ID/messages \
+  -H "Authorization: Bearer $POLYTRADE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -H 'Idempotency-Key: 9167eaf4-1aee-4219-8834-d81418ac7773' \
+  -d '{"content":"Compare NVDA and AMD","stream":true}'
+```
+
+The response uses named Server-Sent Events:
+
+- `run.started`
+- `tool.started`
+- `tool.completed`
+- `message.delta`
+- `message.completed`
+- `run.completed`
+- `run.failed`
+
+`message.completed` contains the authoritative final message. Clients should
+replace any locally accumulated deltas with that content.
+
+Because this stream begins with a POST request, browser clients should use
+`fetch()` and read `response.body`; the browser `EventSource` class only
+supports GET.
+
+Treat assistant markdown as untrusted content. Escape it or pass rendered HTML
+through a maintained sanitizer before inserting it into the DOM.
+
+## Recovery and idempotency
+
+Every message request should send a stable `Idempotency-Key`. Repeating a
+completed request returns the persisted result without calling the model
+again. A key is bound to its original message content and cannot be reused for
+a different message. If the header is omitted, the server generates one and
+returns it in the `Idempotency-Key` response header, but a client-generated key
+is safer for retrying a request whose response never arrived. Use:
+
+```text
+GET /v1/runs/{run_id}
+GET /v1/threads/{thread_id}/messages
+```
+
+to recover state after a disconnect.
+
+## Safety boundary
+
+The generic chat API contains research and paper-analysis tools only.
+`poly:buy`, `poly:sell`, wallet access, and the `place_real_order` tool are
+blocked. The shared chat tool registry is constructed in read-only mode and
+does not load wallet credentials. Any future real-money execution API must use
+a separate `trade:execute` scope, structured parameters, explicit confirmation,
+idempotency, and audit logging.
+
+The old `/agent/run` and `/agent/stream` routes are authenticated compatibility
+adapters. They call the shared backend and return deprecation headers; new
+clients should use `/v1/threads`.

@@ -10,6 +10,7 @@ Launch:  python agui_app.py          # port 4003
 """
 
 import os
+import secrets
 import sys
 import uuid as _uuid
 import logging
@@ -53,308 +54,34 @@ _GOOGLE_SVG = """<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://w
 <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
 </svg>"""
 
-from utils.agui import setup_agui, get_chat_styles, StreamingCommand
+from utils.agui import setup_agui, get_chat_styles
+from chat.service import get_chat_service
 
-# ---------------------------------------------------------------------------
-# LangGraph Agent with StructuredTool wrappers
-# ---------------------------------------------------------------------------
-
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import StructuredTool
-from langgraph.prebuilt import create_react_agent
-
-SYSTEM_PROMPT = (
-    "You are PolyTrade, an AI financial research and Polymarket weather trading assistant. "
-    "You have tools to look up stock data, news, analyst ratings, and Polymarket weather markets. "
-    "Use your tools when users ask about specific stocks or market data. "
-    "Be concise and use markdown formatting with tables where appropriate. "
-    "Users can type CLI commands directly in chat (e.g. load AAPL, fa NVDA, "
-    "poly:weather London, poly:backtest Seoul 7) and they will be executed automatically. "
-    "For stock queries, always use the appropriate tool to get real data."
-)
-
-
-# --- Tool wrappers ---
-
-def get_stock_financials(ticker: str) -> str:
-    """Get financial data (revenue, earnings, margins) for a stock ticker."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("get_financials")
-        if tool:
-            return tool.func(ticker=ticker.upper())
-        return f"Tool not available for {ticker}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def get_ticker_info(ticker: str) -> str:
-    """Get company profile and current quote for a stock ticker."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("get_ticker_details")
-        if tool:
-            return tool.func(ticker=ticker.upper())
-        return f"Tool not available for {ticker}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def get_analyst_ratings(ticker: str) -> str:
-    """Get analyst recommendations and price targets for a stock."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("get_analyst_recommendations")
-        if tool:
-            return tool.func(ticker=ticker.upper())
-        return f"Tool not available for {ticker}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def get_stock_news(ticker: str) -> str:
-    """Get latest news headlines for a stock ticker."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("get_news")
-        if tool:
-            return tool.func(ticker=ticker.upper())
-        return f"Tool not available for {ticker}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def get_earnings_estimates(ticker: str) -> str:
-    """Get earnings estimates for a stock ticker."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("get_earnings_estimates")
-        if tool:
-            return tool.func(ticker=ticker.upper())
-        return f"Tool not available for {ticker}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def search_weather_markets(city: str = "London") -> str:
-    """Search Polymarket weather prediction markets for a city."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("search_weather_markets")
-        if tool:
-            return tool.func(query="temperature", city=city)
-        return "Tool not available"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def scan_opportunities() -> str:
-    """Scan for high-edge weather market opportunities across all cities."""
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        agent = Agent.create(AgentConfig())
-        tool = agent.tool_map.get("scan_weather_opportunities")
-        if tool:
-            return tool.func()
-        return "Tool not available"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-# ---------------------------------------------------------------------------
-# Build LangGraph agent from tool functions
-# ---------------------------------------------------------------------------
-
-_provider = os.getenv("MODEL_PROVIDER", "xai")
-_model = os.getenv("MODEL", "grok-3-mini")
-
-_llm_kwargs = {
-    "model": _model,
-    "temperature": 0.5,
-    "max_tokens": 3000,
-    "streaming": True,
-}
-
-if _provider == "xai":
-    _llm_kwargs["api_key"] = os.getenv("XAI_API_KEY")
-    _llm_kwargs["base_url"] = "https://api.x.ai/v1"
-elif _provider == "openai":
-    _llm_kwargs["api_key"] = os.getenv("OPENAI_API_KEY")
-elif _provider == "anthropic":
-    from langchain_anthropic import ChatAnthropic
-    _llm_kwargs.pop("max_tokens", None)
-
-TOOLS = [
-    StructuredTool.from_function(get_stock_financials, name="get_stock_financials",
-        description="Get financial data (revenue, earnings, margins) for a stock."),
-    StructuredTool.from_function(get_ticker_info, name="get_ticker_info",
-        description="Get company profile and current quote for a stock."),
-    StructuredTool.from_function(get_analyst_ratings, name="get_analyst_ratings",
-        description="Get analyst recommendations and price targets for a stock."),
-    StructuredTool.from_function(get_stock_news, name="get_stock_news",
-        description="Get latest news headlines for a stock ticker."),
-    StructuredTool.from_function(get_earnings_estimates, name="get_earnings_estimates",
-        description="Get earnings estimates for a stock."),
-    StructuredTool.from_function(search_weather_markets, name="search_weather_markets",
-        description="Search Polymarket weather prediction markets for a city."),
-    StructuredTool.from_function(scan_opportunities, name="scan_opportunities",
-        description="Scan for high-edge weather market opportunities across all cities."),
-]
-
-if _provider == "anthropic":
-    llm = ChatAnthropic(**_llm_kwargs)
-else:
-    llm = ChatOpenAI(**_llm_kwargs)
-
-langgraph_agent = create_react_agent(model=llm, tools=TOOLS, prompt=SYSTEM_PROMPT)
+# The agent, tools, commands, persistence, and events all live behind this service.
+chat_service = get_chat_service()
 
 
 # ---------------------------------------------------------------------------
 # FastHTML app
 # ---------------------------------------------------------------------------
 
+_session_secret = os.getenv("JWT_SECRET") or secrets.token_urlsafe(32)
+if not os.getenv("JWT_SECRET"):
+    logger.warning("JWT_SECRET is not set; sessions will reset when the app restarts.")
+
 app, rt = fast_app(
     exts="ws",
-    secret_key=os.getenv("JWT_SECRET", "polytrade-dev-secret-change-me"),
+    secret_key=_session_secret,
     hdrs=[
+        Script(
+            src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+        ),
         Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
     ],
 )
 
 
-# ---------------------------------------------------------------------------
-# CLI command interceptor — routes poly:*, load, fa, etc. to CommandProcessor
-# ---------------------------------------------------------------------------
-
-_STRUCTURED_PREFIXES = {
-    "load", "news", "fa", "anr", "ee", "rv", "own", "gp", "gip",
-    "quote", "scan", "help", "h", "?",
-}
-
-_STREAMING_COMMANDS = {"poly:backtest", "poly:backtestv2", "poly:backtest2", "poly:predict", "scan"}
-
-
-async def _command_interceptor(msg: str, session):
-    """Detect CLI commands and route to CommandProcessor. Returns markdown or None."""
-    cmd_lower = msg.strip().lower()
-    first_word = cmd_lower.split()[0] if cmd_lower.split() else ""
-
-    is_command = (
-        first_word in _STRUCTURED_PREFIXES or
-        first_word.startswith("poly:")
-    )
-
-    if not is_command:
-        return None
-
-    # Help
-    if cmd_lower in ("help", "h", "?"):
-        return _AGUI_HELP
-
-    # Long-running commands → StreamingCommand
-    if first_word in _STREAMING_COMMANDS:
-        return StreamingCommand(msg, session)
-
-    # Execute via CommandProcessor
-    try:
-        from agent.agent import Agent
-        from agent.types import AgentConfig
-        from components.command_processor import CommandProcessor
-        import io
-        from rich.console import Console
-
-        config = AgentConfig(
-            model=os.getenv("MODEL"),
-            model_provider=os.getenv("MODEL_PROVIDER"),
-        )
-        agent = Agent.create(config)
-        # Extract user_id from session
-        user_id = None
-        if session:
-            user = session.get("user") if isinstance(session, dict) else getattr(session, "get", lambda k: None)("user")
-            if user:
-                user_id = user.get("user_id") if isinstance(user, dict) else None
-        cp = CommandProcessor(agent, user_id=user_id)
-
-        # Capture Rich output
-        buf = io.StringIO()
-        original_console = cp.console
-        cp.console = Console(file=buf, force_terminal=False, width=120, no_color=True)
-
-        try:
-            is_handled, agent_query = await cp.process_command(msg)
-            output = buf.getvalue().strip()
-
-            if not is_handled and agent_query:
-                return None  # Let AI handle it
-
-            if output:
-                return f"```\n{output}\n```"  # Stripped by core.py and rendered as <pre>
-            return "Command executed."
-        finally:
-            cp.console = original_console
-    except Exception as e:
-        return f"# Error\n\n```\n{e}\n```"
-
-
-_AGUI_HELP = """# PolyTrade Commands
-
-## Stock Research
-- `load AAPL` — Company profile & quote
-- `fa NVDA` — Financial analysis
-- `anr MSFT` — Analyst recommendations
-- `ee TSLA` — Earnings estimates
-- `rv GOOG` — Relative valuation
-- `own AAPL` — Institutional ownership
-- `gp AAPL` — Price graph
-- `gip AAPL` — Intraday price graph
-- `news TSLA` — Latest news
-- `quote AAPL` — Real-time quote
-
-## Weather Markets
-- `poly:weather London` — Search markets + token IDs
-- `poly:weather Seoul` — Seoul weather markets
-- `poly:weather New York` — NYC weather markets
-- `scan` — Scan all weather opportunities
-
-## Backtest & Predict
-- `poly:backtest London 7` — 7-day London backtest
-- `poly:backtestv2 Seoul 7` — Cross-sectional YES/NO backtest
-- `poly:predict London 2` — Forward-looking prediction
-
-## Trading
-- `poly:simbuy 50 <token_id>` — Simulate trade (get token ID from poly:weather)
-- `poly:buy 50 <token_id>` — Real USDC buy order
-- `poly:sell 50 <token_id>` — Real USDC sell order
-- `poly:portfolio` — On-chain USDC portfolio
-- `poly:paperportfolio` — Paper trading portfolio
-
-## Reports & PnL
-- `poly:report weather` — Weather trades report (backtest)
-- `poly:report weather paper` — Weather paper trades
-- `poly:trades weather` — Weather trades table
-- `poly:trades weather paper` — Weather paper trades
-- `poly:pnl weather` — Weather PnL summary
-- `poly:pnl weather paper` — Weather paper PnL
-
-## AI Chat
-Type any question to chat with AI about stocks & weather markets.
-"""
-
-agui = setup_agui(app, langgraph_agent, command_interceptor=_command_interceptor)
+agui = setup_agui(app, chat_service)
 
 
 # ---------------------------------------------------------------------------
@@ -837,9 +564,8 @@ _HELP_CATEGORIES = [
     ]),
     ("Trading", [
         ("poly:simbuy 50 <token_id>", "Simulate buy $50 (needs token ID)"),
-        ("poly:buy 50 <token_id>", "Real USDC buy order"),
-        ("poly:sell 50 <token_id>", "Real USDC sell order"),
-        ("poly:portfolio", "On-chain USDC portfolio"),
+        ("poly:paperbuy 50 <token_id>", "Add an isolated paper trade"),
+        ("poly:papersell <trade_id>", "Close a paper trade"),
         ("poly:paperportfolio", "Paper trading portfolio"),
     ]),
     ("Reports & PnL", [
@@ -963,7 +689,7 @@ def _left_pane(session):
         except OSError:
             return os.getenv("WEB_APP_URL", "https://app.polytrade.chat")
 
-    if user:
+    if user and (os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY")):
         from utils.auth import create_cross_app_token
         sso_token = create_cross_app_token(user["user_id"], user["email"])
         web_host = _get_web_url()
@@ -1121,26 +847,16 @@ def get(session, new: str = "", thread: str = ""):
 
 @rt("/agui-conv/list")
 async def conv_list(session):
-    """Return the conversation list for the sidebar (DB-backed, filtered by user)."""
-    from utils.agui.chat_store import list_conversations
+    """Return conversations from the same repository used by the chat API."""
     current_tid = session.get("thread_id", "")
     user = session.get("user")
     if not user:
         return Div(Div("Login to see your chats", cls="conv-empty"))
     user_id = user.get("user_id")
-    # Claim current thread if it has no user_id
-    if current_tid and user_id:
-        try:
-            from db.connection import get_pool
-            from uuid import UUID
-            pool = await get_pool()
-            await pool.execute("""
-                UPDATE polycode.chat_conversations
-                SET user_id = $1 WHERE thread_id = $2 AND user_id IS NULL
-            """, UUID(user_id), UUID(current_tid))
-        except Exception:
-            pass
-    convs = await list_conversations(user_id=user_id, limit=20)
+    try:
+        convs = await chat_service.list_threads(user_id=user_id, limit=20)
+    except Exception:
+        return Div(Div("Chats are temporarily unavailable", cls="conv-empty"))
     items = []
     for c in convs:
         tid = c["thread_id"]
@@ -1157,6 +873,12 @@ async def conv_list(session):
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
+
+def _reset_chat_identity(session):
+    """Never carry a thread across an anonymous/authenticated identity change."""
+    session["thread_id"] = str(_uuid.uuid4())
+    session.pop("chat_session_id", None)
+
 
 @rt("/agui-auth/login-form")
 def login_form_fragment():
@@ -1227,6 +949,7 @@ async def agui_login(session, email: str = "", password: str = ""):
     if not user:
         return Div(Div("Invalid email or password.", cls="auth-error"), login_form_fragment())
     session_login(session, user)
+    _reset_chat_identity(session)
     # Use HX-Redirect header for HTMX to do a full page reload
     from starlette.responses import Response
     resp = Response(status_code=200, headers={"HX-Redirect": "/"})
@@ -1245,6 +968,7 @@ async def agui_register(session, email: str = "", password: str = "", display_na
     if not user:
         return Div(Div("Email already registered.", cls="auth-error"), register_form_fragment())
     session_login(session, user)
+    _reset_chat_identity(session)
     from starlette.responses import Response
     return Response(status_code=200, headers={"HX-Redirect": "/"})
 
@@ -1266,6 +990,7 @@ async def register_page(request, session, msg: str = ""):
             user = await create_user(email, password, display_name or None)
             if user:
                 session_login(session, user)
+                _reset_chat_identity(session)
                 from starlette.responses import RedirectResponse
                 return RedirectResponse("/", status_code=303)
             msg = "Email already registered."
@@ -1303,6 +1028,7 @@ async def signin_page(request, session, msg: str = ""):
         user = await authenticate(email, password)
         if user:
             session_login(session, user)
+            _reset_chat_identity(session)
             from starlette.responses import RedirectResponse
             return RedirectResponse("/", status_code=303)
         msg = "Invalid email or password."
@@ -1333,6 +1059,7 @@ async def signin_page(request, session, msg: str = ""):
 def logout(session):
     """Sign out — clear session."""
     session.pop("user", None)
+    _reset_chat_identity(session)
     from starlette.responses import RedirectResponse
     return RedirectResponse("/", status_code=303)
 
@@ -1631,6 +1358,7 @@ if _oauth_enabled:
 
         if user:
             session_login(session, user)
+            _reset_chat_identity(session)
         else:
             from starlette.responses import RedirectResponse
             return RedirectResponse("/?error=Could+not+create+account")

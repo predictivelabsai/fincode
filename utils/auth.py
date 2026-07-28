@@ -30,6 +30,8 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against its bcrypt hash."""
+    if len(password.encode("utf-8")) > 72:
+        return False
     return _bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
@@ -164,7 +166,7 @@ async def update_display_name(user_id: str, display_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def create_jwt_token(user_id: str, email: str) -> str:
-    """Create a JWT token for API authentication."""
+    """Create the legacy unscoped web-session JWT."""
     import jwt
     secret = os.getenv("JWT_SECRET")
     if not secret:
@@ -179,7 +181,7 @@ def create_jwt_token(user_id: str, email: str) -> str:
 
 
 def decode_jwt_token(token: str) -> Optional[Dict]:
-    """Decode and verify a JWT token. Returns payload dict or None."""
+    """Decode the legacy web-session JWT. Returns payload dict or None."""
     import jwt
     secret = os.getenv("JWT_SECRET")
     if not secret:
@@ -189,6 +191,55 @@ def decode_jwt_token(token: str) -> Optional[Dict]:
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
+        return None
+
+
+def create_api_token(user_id: str, email: str, expires_minutes: int = 60) -> str:
+    """Create a scoped access token for the versioned HTTP API."""
+    import jwt
+
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        raise RuntimeError("JWT_SECRET not set")
+    now = datetime.now(timezone.utc)
+    issuer = os.getenv("JWT_ISSUER", "polytrade")
+    audience = os.getenv("JWT_AUDIENCE", "polytrade-api")
+    payload = {
+        "sub": str(user_id),
+        "user_id": str(user_id),
+        "email": email,
+        "purpose": "api_access",
+        "scope": "chat:read chat:write",
+        "iss": issuer,
+        "aud": audience,
+        "jti": secrets.token_urlsafe(24),
+        "iat": now,
+        "exp": now + timedelta(minutes=max(1, min(expires_minutes, 1440))),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def decode_api_token(token: str) -> Optional[Dict]:
+    """Verify an API access token, including issuer, audience, and purpose."""
+    import jwt
+
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            issuer=os.getenv("JWT_ISSUER", "polytrade"),
+            audience=os.getenv("JWT_AUDIENCE", "polytrade-api"),
+        )
+        if payload.get("purpose") != "api_access":
+            return None
+        if not payload.get("user_id"):
+            return None
+        return payload
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
 
@@ -208,7 +259,9 @@ def session_login(session, user: Dict):
 def create_cross_app_token(user_id: str, email: str) -> str:
     """Create a short-lived JWT (60s) for cross-app SSO (agui→web_app)."""
     import jwt
-    secret = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "polytrade-fallback-secret"))
+    secret = os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY")
+    if not secret:
+        raise RuntimeError("JWT_SECRET not set")
     payload = {
         "user_id": str(user_id),
         "email": email,
@@ -222,7 +275,9 @@ def create_cross_app_token(user_id: str, email: str) -> str:
 def verify_cross_app_token(token: str) -> Optional[Dict]:
     """Verify a cross-app SSO token. Returns {user_id, email} or None."""
     import jwt
-    secret = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "polytrade-fallback-secret"))
+    secret = os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY")
+    if not secret:
+        return None
     try:
         payload = jwt.decode(token, secret, algorithms=["HS256"])
         if payload.get("purpose") != "cross_app_sso":

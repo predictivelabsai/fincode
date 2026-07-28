@@ -1,5 +1,9 @@
 # PolyCode — Changes & New Features
 
+> Historical note: the current shared chat API is authenticated, runs on port
+> 4000, and uses `/v1/threads`. The `/agent/*` examples below describe the
+> deprecated pre-v1 interface. See `docs/chat_api.md` for current usage.
+
 ## Overview of Changes Added
 
 Five major features were added on top of the existing PolyCode codebase:

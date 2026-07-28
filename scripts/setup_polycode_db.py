@@ -10,8 +10,8 @@ Run once before starting the application:
     python scripts/setup_polycode_db.py
 """
 import os
-import re
 import sys
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -26,19 +26,15 @@ except ImportError:
     sys.exit(1)
 
 # ── Connection URL ────────────────────────────────────────────────────────────
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://finespresso:mlfpass2026@72.62.114.124:5432/finespresso_db",
-)
-
-m = re.match(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", DB_URL)
-if not m:
-    print(f"ERROR: Could not parse DATABASE_URL: {DB_URL}")
+DB_URL = os.getenv("POLYCODE_DB_URL") or os.getenv("DATABASE_URL")
+if not DB_URL:
+    print("ERROR: Set POLYCODE_DB_URL or DATABASE_URL before running this script.")
     sys.exit(1)
 
-DB_USER, DB_PASS, DB_HOST, DB_PORT, DB_NAME = (
-    m.group(1), m.group(2), m.group(3), m.group(4), m.group(5),
-)
+parsed_url = urlparse(DB_URL)
+DB_HOST = parsed_url.hostname or "unknown"
+DB_PORT = parsed_url.port or 5432
+DB_NAME = parsed_url.path.lstrip("/") or "unknown"
 SCHEMA = "polycode"
 
 # ── SQL — schema + tables ─────────────────────────────────────────────────────
@@ -146,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_conv_user     ON {SCHEMA}.chat_conversations
 CREATE INDEX IF NOT EXISTS idx_chat_conv_updated  ON {SCHEMA}.chat_conversations(updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_thread    ON {SCHEMA}.chat_messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_created   ON {SCHEMA}.chat_messages(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_msg_thread_message
+    ON {SCHEMA}.chat_messages(thread_id, message_id);
 
 -- ── users ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.users (
@@ -161,6 +159,32 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.users (
 
 CREATE INDEX IF NOT EXISTS idx_users_user_id ON {SCHEMA}.users(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_email   ON {SCHEMA}.users(email);
+
+-- ── chat_runs: durable status, idempotency, and reconnect support ─────────
+CREATE TABLE IF NOT EXISTS {SCHEMA}.chat_runs (
+    run_id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    thread_id             UUID          NOT NULL REFERENCES {SCHEMA}.chat_conversations(thread_id) ON DELETE CASCADE,
+    user_id               UUID,
+    idempotency_key       VARCHAR(200)  NOT NULL,
+    request_fingerprint   CHAR(64),
+    user_message_id       UUID          NOT NULL,
+    assistant_message_id  UUID          NOT NULL,
+    status                VARCHAR(20)   NOT NULL DEFAULT 'running',
+    error_code            VARCHAR(100),
+    error_message         TEXT,
+    started_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    finished_at           TIMESTAMPTZ
+);
+
+ALTER TABLE {SCHEMA}.chat_runs
+    ADD COLUMN IF NOT EXISTS request_fingerprint CHAR(64);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_run_idempotency
+    ON {SCHEMA}.chat_runs(thread_id, idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_run_active_thread
+    ON {SCHEMA}.chat_runs(thread_id) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_chat_runs_user_started
+    ON {SCHEMA}.chat_runs(user_id, started_at DESC);
 
 -- ── password_reset_tokens ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.password_reset_tokens (
@@ -190,11 +214,7 @@ def main():
     # ── Step 1: connect to existing database ──────────────────────────────
     print("[1/2] Connecting to existing database …")
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST, port=int(DB_PORT),
-            user=DB_USER, password=DB_PASS,
-            database=DB_NAME,
-        )
+        conn = psycopg2.connect(DB_URL)
     except Exception as exc:
         print(f"ERROR: Could not connect to {DB_NAME}: {exc}")
         sys.exit(1)
@@ -210,7 +230,10 @@ def main():
     conn.close()
 
     print(f"  Schema '{SCHEMA}' ready")
-    print(f"  Tables: {SCHEMA}.runs, {SCHEMA}.trades, {SCHEMA}.pnl_snapshots")
+    print(
+        f"  Tables: {SCHEMA}.runs, {SCHEMA}.trades, "
+        f"{SCHEMA}.pnl_snapshots, {SCHEMA}.chat_runs"
+    )
     print(f"\n  Done!\n")
 
 

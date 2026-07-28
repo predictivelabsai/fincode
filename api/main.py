@@ -5,9 +5,14 @@ Endpoints
 ---------
 GET  /                  → health check (short)
 GET  /health            → detailed health info
-GET  /agent/tools       → list all agent tools
-POST /agent/run         → run agent, block until done, return JSON
-POST /agent/stream      → run agent, stream AG-UI compatible SSE events
+POST /v1/auth/token     → exchange user credentials for an API access token
+POST /v1/threads        → create an owned conversation
+GET  /v1/threads        → list owned conversations
+POST /v1/threads/{id}/messages → run canonical chat as JSON or SSE
+GET  /v1/runs/{run_id} → recover a persisted chat run
+GET  /agent/tools       → deprecated authenticated tool listing
+POST /agent/run         → deprecated stateless compatibility adapter
+POST /agent/stream      → deprecated SSE compatibility adapter
 GET  /pnl/summary       → aggregate PnL stats
 GET  /pnl/trades        → list trades (filterable)
 POST /pnl/trades        → insert / upsert a trade
@@ -22,56 +27,89 @@ POST /predict           → market prediction (existing)
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+load_dotenv()
 
-from agent.agent import Agent
-from agent.types import (
-    AgentConfig,
-    AnswerChunkEvent,
-    AnswerStartEvent,
-    DoneEvent,
-    LogEvent,
-    ToolEndEvent,
-    ToolErrorEvent,
-    ToolStartEvent,
-)
 from agent.tools.polymarket_tool import PolymarketClient
 from agent.tools.visual_crossing_client import VisualCrossingClient
+from api.routes.auth import router as auth_router
+from api.routes.chat import router as chat_router
+from api.security import (
+    Principal,
+    require_admin,
+    require_chat_reader,
+    require_chat_writer,
+    require_trade_reader,
+)
+from chat.events import (
+    MESSAGE_COMPLETED,
+    MESSAGE_DELTA,
+    RUN_COMPLETED,
+    RUN_FAILED,
+    RUN_STARTED,
+    TOOL_COMPLETED,
+    TOOL_STARTED,
+)
+from chat.agent_factory import get_chat_tools, get_tool_registry
+from chat.service import get_chat_service
 from utils.backtest_engine import BacktestEngine
 
 app = FastAPI(
     title="PolyTrade API",
-    description="Financial Research Agent — remote API",
-    version="2.0.0",
+    description="Shared PolyTrade research chat and data API",
+    version="3.0.0",
 )
 
-# Allow all origins so the FastHTML chat UI (different port) can call this API
+_default_origins = (
+    "http://localhost:4002,http://localhost:4003,"
+    "http://127.0.0.1:4002,http://127.0.0.1:4003"
+)
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    expose_headers=["Idempotency-Key", "X-Persistence-Mode"],
 )
+
+app.include_router(auth_router)
+app.include_router(chat_router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models
 # ─────────────────────────────────────────────────────────────────────────────
 
+class AgentHistoryMessage(BaseModel):
+    role: str = Field(max_length=20)
+    content: str = Field(max_length=20_000)
+
+
 class AgentQueryRequest(BaseModel):
-    query: str
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    chat_history: Optional[List[Dict[str, str]]] = []
-    run_id: Optional[str] = None          # attach to an existing DB run
+    query: str = Field(min_length=1, max_length=20_000)
+    model: Optional[str] = Field(default=None, max_length=200)
+    provider: Optional[str] = Field(default=None, max_length=50)
+    chat_history: List[AgentHistoryMessage] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    run_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class ForecastRequest(BaseModel):
@@ -128,17 +166,6 @@ class TradeUpdateRequest(BaseModel):
     pnl: Optional[float] = None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: build agent config
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _make_config(req: AgentQueryRequest) -> AgentConfig:
-    return AgentConfig(
-        model=req.model or os.getenv("MODEL"),
-        model_provider=req.provider or os.getenv("MODEL_PROVIDER"),
-    )
-
-
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
@@ -155,12 +182,73 @@ async def root():
 
 @app.get("/health")
 async def health():
+    try:
+        service = get_chat_service()
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "misconfigured",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": "3.0.0",
+            },
+        )
+
+    database_status = "not_configured"
+    if service.persistence_mode == "postgres":
+        try:
+            from db.connection import get_pool
+
+            pool = await get_pool()
+            await pool.fetchval("SELECT 1")
+            schema_ready = await pool.fetchval(
+                """
+                SELECT
+                    to_regclass('polycode.chat_conversations') IS NOT NULL
+                    AND to_regclass('polycode.chat_messages') IS NOT NULL
+                    AND to_regclass('polycode.chat_runs') IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema='polycode'
+                          AND table_name='chat_runs'
+                          AND column_name='request_fingerprint'
+                    )
+                """
+            )
+            if not schema_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "unhealthy",
+                        "database": "migration_required",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "version": "3.0.0",
+                        "chat_persistence": service.persistence_mode,
+                    },
+                )
+            database_status = "healthy"
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "unhealthy",
+                    "database": "unavailable",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "version": "3.0.0",
+                    "chat_persistence": service.persistence_mode,
+                },
+            )
+
     return {
         "status": "healthy",
         "model": os.getenv("MODEL", ""),
         "provider": os.getenv("MODEL_PROVIDER", ""),
-        "timestamp": datetime.utcnow().isoformat(),
-        "version": "2.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "3.0.0",
+        "chat_persistence": service.persistence_mode,
+        "database": database_status,
     }
 
 
@@ -169,202 +257,153 @@ async def health():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/agent/tools")
-async def list_tools():
-    """List all tools available to the agent."""
-    agent = Agent.create(AgentConfig())
+async def list_tools(_principal: Principal = Depends(require_chat_reader)):
+    """Deprecated research-tool listing. Real-order tools are never exposed."""
+    tools = get_chat_tools()
     return {
-        "tools": [{"name": t.name, "description": t.description} for t in agent.tools],
-        "count": len(agent.tools),
+        "tools": [{"name": t.name, "description": t.description} for t in tools],
+        "count": len(tools),
+        "deprecated": True,
+        "replacement": "/v1/threads/{thread_id}/messages",
     }
 
 
 @app.post("/agent/run")
-async def run_agent(req: AgentQueryRequest):
-    """
-    Run the agent synchronously and return the full answer.
-    Optionally records the run in the DB if POLYCODE_DB_URL is set.
-    """
-    config = _make_config(req)
-    agent  = Agent.create(config)
-
-    # Optionally create a DB run record
-    run_id = req.run_id
-    try:
-        from db.repository import create_run, finish_run
-        run_id = run_id or await create_run(req.query, config.model, config.model_provider)
-    except Exception:
-        pass  # DB optional
-
+async def run_agent(
+    req: AgentQueryRequest,
+    principal: Principal = Depends(require_chat_writer),
+):
+    """Deprecated stateless adapter over the canonical research chat backend."""
+    service = get_chat_service()
     final_answer = ""
-    iterations   = 0
-    tool_calls: List[Dict] = []
+    run_id = None
+    tool_calls: List[Dict[str, Any]] = []
+    failure = None
 
-    try:
-        async for event in agent.run(req.query, req.chat_history):
-            if isinstance(event, DoneEvent):
-                final_answer = event.answer
-                iterations   = event.iterations
-                tool_calls   = event.tool_calls
+    async for event in service.stream_stateless(
+        content=req.query,
+        history=[message.model_dump() for message in req.chat_history],
+        user_id=principal.user_id,
+    ):
+        if event.event == RUN_STARTED:
+            run_id = event.data.get("run_id")
+        elif event.event == TOOL_STARTED:
+            tool_calls.append(
+                {
+                    "tool": event.data.get("name"),
+                    "args": event.data.get("args", {}),
+                }
+            )
+        elif event.event == MESSAGE_COMPLETED:
+            final_answer = event.data.get("message", {}).get("content", "")
+        elif event.event == RUN_FAILED:
+            failure = event.data
 
-        try:
-            from db.repository import finish_run
-            await finish_run(run_id, iterations, tool_calls)
-        except Exception:
-            pass
-    except Exception as exc:
-        try:
-            from db.repository import finish_run
-            await finish_run(run_id, iterations, tool_calls, error=str(exc))
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=str(exc))
+    if failure:
+        status_code = 403 if failure.get("code") == "unsafe_command" else 502
+        raise HTTPException(status_code=status_code, detail=failure)
 
-    return {
-        "run_id":     run_id,
-        "query":      req.query,
-        "answer":     final_answer,
-        "iterations": iterations,
-        "tool_calls": tool_calls,
-    }
+    return JSONResponse(
+        {
+            "run_id": run_id,
+            "query": req.query,
+            "answer": final_answer,
+            "iterations": 1,
+            "tool_calls": tool_calls,
+        },
+        headers={
+            "Deprecation": "true",
+            "Link": '</v1/threads>; rel="successor-version"',
+            "Warning": '299 - "Use the authenticated /v1/threads API"',
+        },
+    )
 
 
 @app.post("/agent/stream")
-async def stream_agent(req: AgentQueryRequest):
-    """
-    Run the agent and stream AG-UI compatible Server-Sent Events.
-
-    AG-UI event types emitted:
-      RUN_STARTED        — agent has begun
-      TEXT_MESSAGE_START — assistant message starts
-      TEXT_MESSAGE_CHUNK — incremental token chunk
-      TEXT_MESSAGE_END   — assistant message complete
-      TOOL_CALL_START    — tool execution begins
-      TOOL_CALL_END      — tool execution ends
-      CUSTOM             — thought / log events
-      RUN_FINISHED       — agent done (includes full answer)
-      ERROR              — unhandled exception
-    """
-    config = _make_config(req)
-
-    # Create DB run record (non-fatal if DB unavailable)
-    run_id = req.run_id
-    try:
-        from db.repository import create_run
-        run_id = run_id or await create_run(req.query, config.model, config.model_provider)
-    except Exception:
-        pass
-
+async def stream_agent(
+    req: AgentQueryRequest,
+    principal: Principal = Depends(require_chat_writer),
+):
+    """Deprecated AG-UI-shaped SSE adapter over the canonical chat service."""
     async def event_gen():
-        agent      = Agent.create(config)
-        iterations = 0
-        tool_calls: List[Dict] = []
-
-        yield _sse({"type": "RUN_STARTED", "run_id": run_id, "query": req.query})
-
-        try:
-            async for event in agent.run(req.query, req.chat_history):
-                if isinstance(event, LogEvent):
-                    yield _sse({
-                        "type":    "CUSTOM",
-                        "subtype": f"agent_{event.level}",
-                        "message": event.message,
-                    })
-
-                elif isinstance(event, ToolStartEvent):
-                    tool_calls.append({"tool": event.tool, "args": event.args})
-                    yield _sse({
+        answer = ""
+        message_started = False
+        async for event in get_chat_service().stream_stateless(
+            content=req.query,
+            history=[message.model_dump() for message in req.chat_history],
+            user_id=principal.user_id,
+        ):
+            if event.event == RUN_STARTED:
+                yield _sse(
+                    {
+                        "type": "RUN_STARTED",
+                        "run_id": event.data.get("run_id"),
+                        "query": req.query,
+                    }
+                )
+                yield _sse({"type": "TEXT_MESSAGE_START"})
+                message_started = True
+            elif event.event == MESSAGE_DELTA:
+                yield _sse(
+                    {
+                        "type": "TEXT_MESSAGE_CHUNK",
+                        "chunk": event.data.get("delta", ""),
+                    }
+                )
+            elif event.event == TOOL_STARTED:
+                yield _sse(
+                    {
                         "type": "TOOL_CALL_START",
-                        "tool": event.tool,
-                        "args": event.args,
-                    })
-
-                elif isinstance(event, ToolEndEvent):
-                    yield _sse({
-                        "type":   "TOOL_CALL_END",
-                        "tool":   event.tool,
-                        "result": event.result,
-                    })
-                    # Save trade results to DB
-                    try:
-                        result = {}
-                        if isinstance(event.result, str) and event.result.startswith("{"):
-                            result = json.loads(event.result)
-                        elif isinstance(event.result, dict):
-                            result = event.result
-                        if event.tool == "simulate_polymarket_trade" and result:
-                            from db.repository import upsert_trade
-                            price = float(result.get("vwap", 0))
-                            amount = float(result.get("amount_executed", 0))
-                            if price > 0 and amount > 0:
-                                await upsert_trade({
-                                    "trade_id": f"P-{result.get('market_id','')[:20]}-{int(datetime.now().timestamp())}",
-                                    "run_id": run_id, "market_id": str(result.get("market_id", "")),
-                                    "trade_side": "BUY", "amount": amount, "entry_price": price,
-                                    "shares": float(result.get("shares_bought", 0)),
-                                    "status": "OPEN", "trade_type": "paper",
-                                })
-                        elif event.tool == "place_real_order" and result.get("status") == "success":
-                            from db.repository import upsert_trade
-                            await upsert_trade({
-                                "trade_id": f"R-{int(datetime.now().timestamp())}",
-                                "run_id": run_id, "market_id": str(result.get("token_id", "")),
-                                "trade_side": result.get("side", "BUY"),
-                                "amount": float(result.get("amount", 0)),
-                                "entry_price": 0, "shares": 0,
-                                "status": "OPEN", "trade_type": "real",
-                            })
-                    except Exception:
-                        pass
-
-                elif isinstance(event, ToolErrorEvent):
-                    yield _sse({
-                        "type":  "CUSTOM",
-                        "subtype": "tool_error",
-                        "tool":  event.tool,
-                        "error": event.error,
-                    })
-
-                elif isinstance(event, AnswerStartEvent):
-                    yield _sse({"type": "TEXT_MESSAGE_START"})
-
-                elif isinstance(event, AnswerChunkEvent):
-                    yield _sse({"type": "TEXT_MESSAGE_CHUNK", "chunk": event.chunk})
-
-                elif isinstance(event, DoneEvent):
-                    iterations = event.iterations
+                        "tool_call_id": event.data.get("tool_call_id"),
+                        "tool": event.data.get("name"),
+                        "args": event.data.get("args", {}),
+                    }
+                )
+            elif event.event == TOOL_COMPLETED:
+                yield _sse(
+                    {
+                        "type": "TOOL_CALL_END",
+                        "tool_call_id": event.data.get("tool_call_id"),
+                        "tool": event.data.get("name"),
+                    }
+                )
+            elif event.event == MESSAGE_COMPLETED:
+                answer = event.data.get("message", {}).get("content", "")
+            elif event.event == RUN_COMPLETED:
+                if message_started:
                     yield _sse({"type": "TEXT_MESSAGE_END"})
-                    yield _sse({
-                        "type":       "RUN_FINISHED",
-                        "run_id":     run_id,
-                        "answer":     event.answer,
-                        "iterations": event.iterations,
-                        "tool_calls": event.tool_calls,
-                    })
-                    # Persist to DB
-                    try:
-                        from db.repository import finish_run, save_pnl_snapshot
-                        await finish_run(run_id, event.iterations, event.tool_calls)
-                        await save_pnl_snapshot(run_id=run_id)
-                    except Exception:
-                        pass
-
-        except Exception as exc:
-            yield _sse({"type": "ERROR", "error": str(exc)})
-            try:
-                from db.repository import finish_run
-                await finish_run(run_id, iterations, tool_calls, error=str(exc))
-            except Exception:
-                pass
-        finally:
-            yield _sse({"type": "STREAM_END"})
+                    message_started = False
+                yield _sse(
+                    {
+                        "type": "RUN_FINISHED",
+                        "run_id": event.data.get("run_id"),
+                        "answer": answer,
+                        "iterations": 1,
+                        "tool_calls": event.data.get("tool_calls", []),
+                    }
+                )
+            elif event.event == RUN_FAILED:
+                if message_started:
+                    yield _sse({"type": "TEXT_MESSAGE_END"})
+                    message_started = False
+                yield _sse(
+                    {
+                        "type": "ERROR",
+                        "code": event.data.get("code"),
+                        "error": event.data.get("message"),
+                    }
+                )
+        yield _sse({"type": "STREAM_END"})
 
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":    "no-cache",
+            "Cache-Control":    "no-cache, no-transform",
             "Connection":       "keep-alive",
             "X-Accel-Buffering": "no",
+            "Deprecation": "true",
+            "Link": '</v1/threads>; rel="successor-version"',
         },
     )
 
@@ -374,10 +413,12 @@ async def stream_agent(req: AgentQueryRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/pnl/summary")
-async def get_pnl_summary_endpoint():
+async def get_pnl_summary_endpoint(
+    principal: Principal = Depends(require_chat_reader),
+):
     try:
         from db.repository import get_pnl_summary
-        return await get_pnl_summary()
+        return await get_pnl_summary(user_id=principal.user_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"DB error: {exc}")
 
@@ -389,12 +430,13 @@ async def get_trades_endpoint(
     offset:     int           = Query(0,  ge=0),
     run_id:     Optional[str] = Query(None),
     trade_type: Optional[str] = Query(None, description="paper | backtest | real"),
+    principal: Principal = Depends(require_chat_reader),
 ):
     try:
         from db.repository import get_trades
         trades = await get_trades(
             status=status, limit=limit, offset=offset,
-            run_id=run_id, trade_type=trade_type,
+            run_id=run_id, trade_type=trade_type, user_id=principal.user_id,
         )
         return {"trades": trades, "count": len(trades)}
     except Exception as exc:
@@ -402,32 +444,49 @@ async def get_trades_endpoint(
 
 
 @app.post("/pnl/trades")
-async def create_trade_endpoint(trade: TradeRequest):
+async def create_trade_endpoint(
+    trade: TradeRequest,
+    principal: Principal = Depends(require_chat_writer),
+):
     try:
         from db.repository import upsert_trade
-        return await upsert_trade(trade.model_dump())
+        payload = trade.model_dump()
+        payload["user_id"] = principal.user_id
+        return await upsert_trade(payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"DB error: {exc}")
 
 
 @app.put("/pnl/trades/{trade_id}")
-async def update_trade_endpoint(trade_id: str, update: TradeUpdateRequest):
+async def update_trade_endpoint(
+    trade_id: str,
+    update: TradeUpdateRequest,
+    principal: Principal = Depends(require_chat_writer),
+):
     try:
         from db.repository import update_trade_status
-        await update_trade_status(
+        updated = await update_trade_status(
             trade_id=trade_id,
             status=update.status,
             exit_price=update.exit_price,
             payout=update.payout,
             pnl=update.pnl,
+            user_id=principal.user_id,
         )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Trade not found")
         return {"message": "Trade updated", "trade_id": trade_id}
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"DB error: {exc}")
 
 
 @app.post("/pnl/snapshot")
-async def save_snapshot_endpoint(run_id: Optional[str] = Query(None)):
+async def save_snapshot_endpoint(
+    run_id: Optional[str] = Query(None),
+    _principal: Principal = Depends(require_admin),
+):
     try:
         from db.repository import save_pnl_snapshot
         return await save_pnl_snapshot(run_id=run_id)
@@ -436,7 +495,10 @@ async def save_snapshot_endpoint(run_id: Optional[str] = Query(None)):
 
 
 @app.get("/pnl/snapshots")
-async def get_snapshots_endpoint(limit: int = Query(100, ge=1, le=1000)):
+async def get_snapshots_endpoint(
+    limit: int = Query(100, ge=1, le=1000),
+    _principal: Principal = Depends(require_admin),
+):
     try:
         from db.repository import get_pnl_snapshots
         snapshots = await get_pnl_snapshots(limit=limit)
@@ -450,7 +512,10 @@ async def get_snapshots_endpoint(limit: int = Query(100, ge=1, le=1000)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/runs")
-async def list_runs(limit: int = Query(20, ge=1, le=200)):
+async def list_runs(
+    limit: int = Query(20, ge=1, le=200),
+    _principal: Principal = Depends(require_admin),
+):
     try:
         from db.repository import get_runs
         return {"runs": await get_runs(limit=limit)}
@@ -459,7 +524,10 @@ async def list_runs(limit: int = Query(20, ge=1, le=200)):
 
 
 @app.get("/runs/{run_id}")
-async def get_run_detail(run_id: str):
+async def get_run_detail(
+    run_id: str,
+    _principal: Principal = Depends(require_admin),
+):
     try:
         from db.repository import get_run
         run = await get_run(run_id)
@@ -477,7 +545,10 @@ async def get_run_detail(run_id: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/backtest")
-async def run_backtest_endpoint(req: BacktestRequest):
+async def run_backtest_endpoint(
+    req: BacktestRequest,
+    principal: Principal = Depends(require_chat_writer),
+):
     """Run a weather backtest/prediction and save trades to DB."""
     from datetime import timedelta
 
@@ -522,7 +593,9 @@ async def run_backtest_endpoint(req: BacktestRequest):
         saved = 0
         try:
             from db.repository import save_backtest_trades, finish_run, save_pnl_snapshot
-            saved = await save_backtest_trades(run_id, result, req.city)
+            saved = await save_backtest_trades(
+                run_id, result, req.city, user_id=principal.user_id
+            )
             if run_id:
                 await finish_run(run_id, 1, [{"tool": "backtest_engine"}])
                 await save_pnl_snapshot(run_id=run_id)
@@ -552,10 +625,12 @@ async def run_backtest_endpoint(req: BacktestRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/polymarket/search")
-async def search_weather_markets_endpoint(req: WeatherSearchRequest):
+async def search_weather_markets_endpoint(
+    req: WeatherSearchRequest,
+    _principal: Principal = Depends(require_chat_writer),
+):
     """Search Polymarket weather markets (same as poly:weather CLI command)."""
-    config = AgentConfig()
-    agent = Agent.create(config)
+    agent = get_tool_registry().command_agent
     tool_name = "search_weather_markets"
     if tool_name not in agent.tool_map:
         raise HTTPException(status_code=400, detail="search_weather_markets tool not available. Check TOMORROWIO_API_KEY.")
@@ -576,10 +651,12 @@ async def search_weather_markets_endpoint(req: WeatherSearchRequest):
 
 
 @app.post("/polymarket/simulate")
-async def simulate_trade_endpoint(req: SimulateTradeRequest):
+async def simulate_trade_endpoint(
+    req: SimulateTradeRequest,
+    _principal: Principal = Depends(require_chat_writer),
+):
     """Simulate a Polymarket trade (same as poly:simbuy CLI command)."""
-    config = AgentConfig()
-    agent = Agent.create(config)
+    agent = get_tool_registry().command_agent
     tool_name = "simulate_polymarket_trade"
     if tool_name not in agent.tool_map:
         raise HTTPException(status_code=400, detail="simulate_polymarket_trade tool not available.")
@@ -597,7 +674,9 @@ async def simulate_trade_endpoint(req: SimulateTradeRequest):
 
 
 @app.get("/polymarket/portfolio")
-async def get_portfolio_endpoint():
+async def get_portfolio_endpoint(
+    _principal: Principal = Depends(require_trade_reader),
+):
     """Get on-chain Polymarket portfolio (same as poly:portfolio CLI command)."""
     try:
         from agent.tools.polymarket_tool import get_polymarket_client
@@ -613,7 +692,10 @@ async def get_portfolio_endpoint():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/weather")
-async def get_weather(request: ForecastRequest):
+async def get_weather(
+    request: ForecastRequest,
+    _principal: Principal = Depends(require_chat_writer),
+):
     vc_client = VisualCrossingClient()
     try:
         forecast = await vc_client.get_forecast(request.city)
@@ -625,7 +707,10 @@ async def get_weather(request: ForecastRequest):
 
 
 @app.post("/predict")
-async def run_prediction(request: PredictRequest):
+async def run_prediction(
+    request: PredictRequest,
+    _principal: Principal = Depends(require_chat_writer),
+):
     pm_client = PolymarketClient()
     vc_client = VisualCrossingClient()
     tm_client = None

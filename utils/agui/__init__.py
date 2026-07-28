@@ -7,7 +7,7 @@ by Christoffer Bjorkskog / Novia University — MIT license.
 Adapted for PolyTrade: 3-pane layout, LangGraph streaming.
 """
 
-from .core import setup_agui, AGUISetup, AGUIThread, UI, StreamingCommand
+from .core import setup_agui, AGUISetup, AGUIThread, UI
 from .styles import get_chat_styles, CHAT_UI_STYLES
 
 __all__ = [
@@ -15,7 +15,6 @@ __all__ = [
     "AGUISetup",
     "AGUIThread",
     "UI",
-    "StreamingCommand",
     "get_chat_styles",
     "CHAT_UI_STYLES",
 ]

@@ -16,14 +16,14 @@ This guide explains how to run PolyCode as a distributed system with a generic F
 
 2.  Install API dependencies:
     ```bash
-    pip install -r api/requirements.txt
+    pip install -r requirements.txt
     ```
 
 3.  Run the API server:
     ```bash
     # Run on all interfaces (0.0.0.0) to allow mobile connection
-    # Ensure port 8000 is open in your firewall/security group
-    python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    # Ensure port 4000 is open in your firewall/security group
+    python -m uvicorn api.main:app --host 0.0.0.0 --port 4000 --reload
     ```
 
 ## 2. Mobile Client Setup (Android/Termux)
@@ -41,7 +41,8 @@ This guide explains how to run PolyCode as a distributed system with a generic F
 
 4.  **Configure Connection**:
     *   Edit `thin_client.py` on your phone.
-    *   Change `API_URL` to your server's IP address (e.g., `http://192.168.1.100:8000` or your VPS Public IP).
+    *   Change `API_URL` to your server's IP address (e.g., `http://192.168.1.100:4000` or your VPS Public IP).
+    *   Set `POLYTRADE_API_TOKEN` to a token issued by `POST /v1/auth/token`.
 
 5.  **Run the Client**:
     ```bash
@@ -77,4 +78,5 @@ Enhance the client with speech-to-text using Android's native speech recognizer.
 
 ## Security Note
 
-*   The current implementation uses HTTP. For production execution over the public internet, **setup HTTPS** (e.g., using Nginx + Certbot as a reverse proxy) and consider adding API Key authentication in `api/main.py`.
+*   Use HTTPS in production. API endpoints require a bearer token; do not put
+    access tokens in URLs or commit them to source control.

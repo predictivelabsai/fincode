@@ -30,7 +30,8 @@ class PolymarketCLOBClient:
         api_key: Optional[str] = None,
         secret: Optional[str] = None,
         passphrase: Optional[str] = None,
-        chain_id: int = 137
+        chain_id: int = 137,
+        read_only: bool = False,
     ):
         """Initialize CLOB client.
         
@@ -41,13 +42,21 @@ class PolymarketCLOBClient:
             secret: Polymarket API Secret
             passphrase: Polymarket API Passphrase
             chain_id: Polygon chain ID (137)
+            read_only: Ignore all wallet and API credentials.
         """
         self.host = host
-        self.key = key or os.getenv("POLYMARKET_PRIVATE_KEY")
-        self.api_key = api_key or os.getenv("POLYMARKET_API_KEY")
-        self.secret = secret or os.getenv("POLYMARKET_SECRET")
-        self.passphrase = passphrase or os.getenv("POLYMARKET_PASSPHRASE")
+        self.key = None if read_only else (key or os.getenv("POLYMARKET_PRIVATE_KEY"))
+        self.api_key = (
+            None if read_only else (api_key or os.getenv("POLYMARKET_API_KEY"))
+        )
+        self.secret = None if read_only else (secret or os.getenv("POLYMARKET_SECRET"))
+        self.passphrase = (
+            None
+            if read_only
+            else (passphrase or os.getenv("POLYMARKET_PASSPHRASE"))
+        )
         self.chain_id = chain_id
+        self.read_only = read_only
         
         creds = None
         if self.api_key and self.secret and self.passphrase:

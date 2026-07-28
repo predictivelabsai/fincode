@@ -1,22 +1,23 @@
 """Async PostgreSQL connection pool — uses the 'polycode' schema inside finespresso_db."""
+import asyncio
 import asyncpg
 import os
 from typing import Optional
 
 _pool: Optional[asyncpg.Pool] = None
+_pool_lock: Optional[asyncio.Lock] = None
 
 SCHEMA = "polycode"
 
 
 def _get_dsn() -> str:
     """DSN points to finespresso_db; the polycode schema is set via search_path."""
-    return os.getenv(
-        "POLYCODE_DB_URL",
-        os.getenv(
-            "DATABASE_URL",
-            "postgresql://finespresso:mlfpass2026@72.62.114.124:5432/finespresso_db",
-        ),
-    )
+    dsn = os.getenv("POLYCODE_DB_URL") or os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError(
+            "POLYCODE_DB_URL or DATABASE_URL must be set for PostgreSQL persistence."
+        )
+    return dsn
 
 
 async def _init_conn(conn: asyncpg.Connection) -> None:
@@ -25,27 +26,22 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
 
 
 async def get_pool() -> asyncpg.Pool:
-    """Return (or lazily create) the shared connection pool. Auto-recreates on stale pool."""
-    global _pool
-    if _pool is not None:
-        # Quick health check — if pool is closed, recreate
-        try:
-            await _pool.fetchval("SELECT 1")
-        except Exception:
-            try:
-                await _pool.close()
-            except Exception:
-                pass
-            _pool = None
-    if _pool is None:
-        _pool = await asyncpg.create_pool(
-            _get_dsn(),
-            min_size=2,
-            max_size=10,
-            command_timeout=30,
-            init=_init_conn,
-        )
-    return _pool
+    """Return or lazily create the process-wide connection pool."""
+    global _pool, _pool_lock
+    if _pool is not None and not _pool.is_closing():
+        return _pool
+    if _pool_lock is None:
+        _pool_lock = asyncio.Lock()
+    async with _pool_lock:
+        if _pool is None or _pool.is_closing():
+            _pool = await asyncpg.create_pool(
+                _get_dsn(),
+                min_size=2,
+                max_size=10,
+                command_timeout=30,
+                init=_init_conn,
+            )
+        return _pool
 
 
 async def close_pool() -> None:
