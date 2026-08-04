@@ -1,0 +1,556 @@
+/** @vitest-environment jsdom */
+
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation } from "react-router-dom";
+
+import RoutedApp from "./RoutedApp";
+
+const THREAD_A = "11111111-1111-4111-8111-111111111111";
+const THREAD_B = "22222222-2222-4222-8222-222222222222";
+const RUN_ID = "33333333-3333-4333-8333-333333333333";
+const WALLET = "0x0000000000000000000000000000000000000001";
+
+const mocks = vi.hoisted(() => {
+  class GatewayError extends Error {
+    constructor(message: string, readonly code: string, readonly status: number) {
+      super(message);
+    }
+  }
+  return {
+    GatewayError,
+    accountOverview: vi.fn(),
+    attachWallet: vi.fn(),
+    backtestCreate: vi.fn(),
+    backtestGet: vi.fn(),
+    backtestList: vi.fn(),
+    createAgentThread: vi.fn(),
+    currentWalletSession: vi.fn(),
+    deleteAgentThread: vi.fn(),
+    eligibility: vi.fn(),
+    getAgentThreadItems: vi.fn(),
+    listAgentThreads: vi.fn(),
+    paperFills: vi.fn(),
+    paperOrder: vi.fn(),
+    paperPortfolio: vi.fn(),
+    paperQuote: vi.fn(),
+    refreshPaperPortfolio: vi.fn(),
+    runAgentTurn: vi.fn(),
+    searchMarkets: vi.fn(),
+  };
+});
+
+vi.mock("./env", () => ({
+  env: {
+    VITE_AGENT_URL: "https://agent.test",
+    VITE_BACKTEST_URL: "https://backtest.test",
+    VITE_GATEWAY_URL: "https://gateway.test",
+    VITE_CLERK_PUBLISHABLE_KEY: "pk_test",
+    VITE_CLERK_JWT_TEMPLATE: "polytrade",
+  },
+}));
+
+vi.mock("./auth", () => ({
+  useAuthentication: () => ({
+    getToken: async () => "token",
+    accountControl: <span data-testid="profile">Profile</span>,
+  }),
+}));
+
+vi.mock("./agent", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./agent")>();
+  return {
+    ...original,
+    createAgentThread: mocks.createAgentThread,
+    deleteAgentThread: mocks.deleteAgentThread,
+    getAgentThreadItems: mocks.getAgentThreadItems,
+    listAgentThreads: mocks.listAgentThreads,
+    runAgentTurn: mocks.runAgentTurn,
+  };
+});
+
+vi.mock("./api", () => ({
+  GatewayError: mocks.GatewayError,
+  GatewayClient: class GatewayClient {
+    eligibility = mocks.eligibility;
+    currentWalletSession = mocks.currentWalletSession;
+    accountOverview = mocks.accountOverview;
+    searchMarkets = mocks.searchMarkets;
+    paperPortfolio = mocks.paperPortfolio;
+    paperQuote = mocks.paperQuote;
+    paperOrder = mocks.paperOrder;
+    refreshPaperPortfolio = mocks.refreshPaperPortfolio;
+    paperFills = mocks.paperFills;
+    createChallenge = vi.fn();
+    createWalletSession = vi.fn();
+    revokeWalletSession = vi.fn();
+    cancel = vi.fn();
+    createIntent = vi.fn();
+    submitIntent = vi.fn();
+  },
+}));
+
+vi.mock("./backtest", () => ({
+  BacktestClient: class BacktestClient {
+    list = mocks.backtestList;
+    get = mocks.backtestGet;
+    create = mocks.backtestCreate;
+    trades = vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 50, runId: RUN_ID }));
+    series = vi.fn(async () => ({ points: [], runId: RUN_ID }));
+    cancel = vi.fn();
+    delete = vi.fn();
+  },
+}));
+
+vi.mock("./wallet", () => ({
+  connectWallet: mocks.attachWallet,
+  signTypedPayload: vi.fn(),
+}));
+
+const summaryA = {
+  threadId: THREAD_A,
+  title: "Election liquidity",
+  createdAt: "2026-08-03T00:00:00.000Z",
+  updatedAt: "2026-08-03T00:05:00.000Z",
+  expiresAt: "2026-09-02T00:00:00.000Z",
+};
+const summaryB = {
+  threadId: THREAD_B,
+  title: "Fed order book",
+  createdAt: "2026-08-02T00:00:00.000Z",
+  updatedAt: "2026-08-02T00:05:00.000Z",
+  expiresAt: "2026-09-01T00:00:00.000Z",
+};
+const session = {
+  sessionId: "44444444-4444-4444-8444-444444444444",
+  walletAddress: WALLET,
+  signatureType: 0 as const,
+  idleExpiresAt: "2026-08-04T01:00:00.000Z",
+  expiresAt: "2026-08-04T08:00:00.000Z",
+};
+const overview = {
+  walletAddress: WALLET,
+  positions: [],
+  openOrders: [],
+  fills: [],
+  observedAt: "2026-08-04T00:00:00.000Z",
+};
+const paperPortfolio = {
+  initialCash: "10000.000000",
+  cash: "10000.000000",
+  positionsValue: "0.000000",
+  equity: "10000.000000",
+  realizedPnl: "0.000000",
+  unrealizedPnl: "0.000000",
+  totalPnl: "0.000000",
+  totalFees: "0.000000",
+  positions: [],
+  warnings: [],
+  observedAt: "2026-08-04T00:00:00.000Z",
+};
+const paperMarket = {
+  id: "paper-market",
+  conditionId: "paper-condition",
+  slug: "paper-market",
+  question: "Will the paper workspace pass?",
+  description: "",
+  outcomes: ["Yes", "No"],
+  outcomePrices: ["0.40", "0.60"],
+  clobTokenIds: ["123", "456"],
+  active: true,
+  closed: false,
+  acceptingOrders: true,
+  enableOrderBook: true,
+  archived: false,
+  restricted: false,
+  minimumOrderSize: "1",
+  minimumTickSize: "0.01",
+  endDate: null,
+  startDate: null,
+  createdAt: null,
+  closedTime: null,
+  liquidity: "1000",
+  volume: "5000",
+};
+const paperQuote = {
+  conditionId: "paper-condition",
+  tokenId: "123",
+  marketQuestion: "Will the paper workspace pass?",
+  outcome: "Yes",
+  side: "BUY" as const,
+  shares: "10.000000",
+  averagePrice: "0.410000",
+  limitPrice: "0.420000",
+  grossNotional: "4.100000",
+  feeRate: "0.040000",
+  fee: "0.09840",
+  cashEffect: "-4.198400",
+  observedAt: "2026-08-04T00:00:00.000Z",
+};
+const paperFill = {
+  fillId: "55555555-5555-4555-8555-555555555555",
+  kind: "BUY" as const,
+  conditionId: "paper-condition",
+  tokenId: "123",
+  marketQuestion: "Will the paper workspace pass?",
+  outcome: "Yes",
+  shares: "10.000000",
+  averagePrice: "0.410000",
+  grossNotional: "4.100000",
+  feeRate: "0.040000",
+  fee: "0.09840",
+  cashEffect: "-4.198400",
+  realizedPnl: "0.000000",
+  observedAt: "2026-08-04T00:00:00.000Z",
+  createdAt: "2026-08-04T00:00:00.000Z",
+};
+const run = {
+  runId: RUN_ID,
+  marketId: "condition-1",
+  marketQuestion: "Will the activity order be clear?",
+  status: "running" as const,
+  phase: "simulating" as const,
+  progress: 65,
+  config: {
+    strategy: "momentum_v1" as const,
+    initialCapital: "10000",
+    positionSizePct: "0.10",
+    momentumWindowMinutes: 60,
+    momentumThreshold: "0.05",
+    takeProfit: "0.10",
+    stopLoss: "0.05",
+    maxHoldMinutes: 1440,
+    cooldownMinutes: 60,
+    slippage: "0.01",
+    maxFillDelayMinutes: 5,
+  },
+  cancelRequested: false,
+  warnings: [],
+  createdAt: "2026-08-04T00:00:00.000Z",
+};
+
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>;
+}
+
+function renderRoute(route: string) {
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <RoutedApp />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: query.includes("min-width: 1200px"),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  mocks.listAgentThreads.mockResolvedValue([summaryA, summaryB]);
+  mocks.getAgentThreadItems.mockImplementation(async (_url: string, _token: unknown, threadId: string) => ([{
+    kind: "message",
+    id: `${threadId}-message`,
+    role: "assistant",
+    text: threadId === THREAD_A ? "Election answer" : "Fed answer",
+  }]));
+  mocks.createAgentThread.mockResolvedValue(THREAD_A);
+  mocks.deleteAgentThread.mockResolvedValue(undefined);
+  mocks.eligibility.mockResolvedValue({ blocked: false, verified: true, country: "US", region: "NY", checkedAt: new Date().toISOString() });
+  mocks.currentWalletSession.mockRejectedValue(new mocks.GatewayError("No active wallet session", "NOT_FOUND", 404));
+  mocks.accountOverview.mockResolvedValue(overview);
+  mocks.paperPortfolio.mockResolvedValue(paperPortfolio);
+  mocks.refreshPaperPortfolio.mockResolvedValue(paperPortfolio);
+  mocks.paperFills.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  mocks.paperQuote.mockResolvedValue(paperQuote);
+  mocks.paperOrder.mockResolvedValue({ fill: paperFill, portfolio: paperPortfolio });
+  mocks.backtestList.mockResolvedValue([]);
+  mocks.backtestGet.mockResolvedValue({ run, result: null });
+  mocks.attachWallet.mockResolvedValue({ address: WALLET, provider: {} });
+  mocks.runAgentTurn.mockImplementation(async (options: Parameters<typeof import("./agent").runAgentTurn>[0]) => {
+    options.handlers.onMessageStart("assistant-stream");
+    options.handlers.onMessageText("assistant-stream", "Streamed answer");
+  });
+});
+
+afterEach(() => cleanup());
+
+describe("routed workspace", () => {
+  it("loads deep-linked threads and switches without mixing messages", async () => {
+    const user = userEvent.setup();
+    renderRoute(`/chat/${THREAD_A}`);
+
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /Fed order book/i }));
+
+    expect(await screen.findByText("Fed answer")).toBeInTheDocument();
+    expect(screen.queryByText("Election answer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(`/chat/${THREAD_B}`);
+  });
+
+  it("keeps a new chat unsaved until its first message and then replaces the route", async () => {
+    const user = userEvent.setup();
+    mocks.listAgentThreads.mockResolvedValueOnce([]).mockResolvedValue([summaryA]);
+    renderRoute("/chat/new");
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/chat/new");
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "Find election liquidity");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/chat/${THREAD_A}`));
+    expect(mocks.createAgentThread).toHaveBeenCalledTimes(1);
+    expect(mocks.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: THREAD_A, text: "Find election liquidity" }));
+    expect(await screen.findByText("Streamed answer")).toBeInTheDocument();
+  });
+
+  it("keeps an in-flight stream attached to its originating thread across navigation", async () => {
+    const user = userEvent.setup();
+    let streamOptions: Parameters<typeof import("./agent").runAgentTurn>[0] | undefined;
+    let finishStream: (() => void) | undefined;
+    mocks.runAgentTurn.mockImplementation((options: Parameters<typeof import("./agent").runAgentTurn>[0]) => {
+      streamOptions = options;
+      return new Promise<void>((resolve) => { finishStream = resolve; });
+    });
+    renderRoute(`/chat/${THREAD_A}`);
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "Keep this response on A");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    await user.click(screen.getByRole("link", { name: /Fed order book/i }));
+    expect(await screen.findByText("Fed answer")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toBeDisabled();
+
+    await act(async () => {
+      streamOptions!.handlers.onMessageStart("late-a");
+      streamOptions!.handlers.onMessageText("late-a", "Late answer for A");
+      finishStream!();
+    });
+    expect(screen.queryByText("Late answer for A")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: /Election liquidity/i }));
+    expect(await screen.findByText("Late answer for A")).toBeInTheDocument();
+  });
+
+  it("shows unlabeled dots only until the first visible response text", async () => {
+    const user = userEvent.setup();
+    let streamOptions: Parameters<typeof import("./agent").runAgentTurn>[0] | undefined;
+    let finishStream: (() => void) | undefined;
+    mocks.runAgentTurn.mockImplementation((options: Parameters<typeof import("./agent").runAgentTurn>[0]) => {
+      streamOptions = options;
+      return new Promise<void>((resolve) => { finishStream = resolve; });
+    });
+    renderRoute(`/chat/${THREAD_A}`);
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "Trace the stream state");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    expect(screen.getByText("Agent is working")).toBeInTheDocument();
+    expect(screen.queryByText("Reading market data")).not.toBeInTheDocument();
+
+    act(() => {
+      streamOptions!.handlers.onMessageStart("visible-response");
+      streamOptions!.handlers.onMessageText("visible-response", "The visible response has started.");
+    });
+    expect(screen.getByText("The visible response has started.")).toBeInTheDocument();
+    expect(screen.queryByText("Agent is working")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toBeDisabled();
+
+    act(() => finishStream!());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toBeEnabled());
+  });
+
+  it("orders the right-pane tape as proposal, backtest, account, then status", async () => {
+    const proposal = {
+      action: "create" as const,
+      execution: "GTC" as const,
+      tokenId: "123",
+      marketId: "condition-1",
+      marketQuestion: "Will the proposal stay first?",
+      outcome: "Yes",
+      side: "BUY" as const,
+      rationale: "Priority test",
+      observedAt: "2026-08-04T00:00:00.000Z",
+      price: "0.4",
+      size: "10",
+      postOnly: true,
+    };
+    mocks.getAgentThreadItems.mockResolvedValue([
+      { kind: "message", id: "message", role: "assistant", text: "Draft ready" },
+      { kind: "proposal", id: "proposal", proposal, expiresAt: "2099-08-04T00:02:00.000Z" },
+      { kind: "backtest", id: "backtest", backtest: { kind: "backtest_run", ...run } },
+    ]);
+    renderRoute(`/chat/${THREAD_A}`);
+
+    const proposalHeading = await screen.findByRole("heading", { name: "Will the proposal stay first?" });
+    const backtestHeading = await screen.findByRole("heading", { name: "Will the activity order be clear?" });
+    const accountHeading = screen.getByText("Account");
+    const statusHeading = screen.getByText("Eligibility");
+    expect(proposalHeading.compareDocumentPosition(backtestHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(backtestHeading.compareDocumentPosition(accountHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(accountHeading.compareDocumentPosition(statusHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("routes missing wallet sessions to Settings and requires local reattachment after restore", async () => {
+    const user = userEvent.setup();
+    const first = renderRoute("/trades");
+    const settingsLink = await screen.findByRole("link", { name: /Open Settings/i });
+    expect(settingsLink).toHaveAttribute("href", "/settings");
+    first.unmount();
+
+    mocks.currentWalletSession.mockResolvedValue(session);
+    renderRoute("/settings");
+    expect(await screen.findByText("Not locally attached")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Attach matching wallet/i }));
+    expect(await screen.findByText("Matching wallet attached")).toBeInTheDocument();
+  });
+
+  it("opens the isolated paper ledger and completes a preview-confirm fill", async () => {
+    const user = userEvent.setup();
+    mocks.searchMarkets.mockResolvedValue({
+      query: "paper",
+      state: "active",
+      observedAt: "2026-08-04T00:00:00.000Z",
+      events: [{
+        id: "paper-event",
+        slug: "paper-event",
+        title: "Paper event",
+        description: "",
+        endDate: null,
+        liquidity: "1000",
+        volume: "5000",
+        markets: [paperMarket],
+      }],
+    });
+    renderRoute("/paper");
+
+    expect(await screen.findByRole("heading", { name: "Paper trading" })).toBeInTheDocument();
+    expect(screen.getByText("No wallet, signature, real order, or withdrawable balance.")).toBeInTheDocument();
+    expect(mocks.refreshPaperPortfolio).toHaveBeenCalled();
+
+    await user.type(screen.getByRole("textbox", { name: "Search active Polymarket markets" }), "paper");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: /Will the paper workspace pass/i }));
+    await user.type(screen.getByLabelText("Shares"), "10");
+    await user.click(screen.getByRole("button", { name: /Preview paper trade/i }));
+
+    await waitFor(() => expect(mocks.paperQuote).toHaveBeenCalledWith({
+      conditionId: "paper-condition",
+      tokenId: "123",
+      side: "BUY",
+      shares: "10",
+    }));
+    expect(await screen.findByRole("region", { name: "Paper trade preview" })).toHaveTextContent("VWAP");
+    await user.click(screen.getByRole("button", { name: "Confirm paper buy" }));
+
+    await waitFor(() => expect(mocks.paperOrder).toHaveBeenCalledWith({
+      conditionId: "paper-condition",
+      tokenId: "123",
+      side: "BUY",
+      shares: "10",
+      limitPrice: "0.420000",
+    }, expect.any(String)));
+    expect(mocks.attachWallet).not.toHaveBeenCalled();
+  });
+
+  it("searches only resolved markets, validates momentum_v1, and launches directly", async () => {
+    const user = userEvent.setup();
+    mocks.searchMarkets.mockResolvedValue({
+      query: "election",
+      state: "resolved",
+      observedAt: "2026-08-04T00:00:00.000Z",
+      events: [{
+        id: "event",
+        slug: "event",
+        title: "Election",
+        description: "",
+        endDate: null,
+        liquidity: "100",
+        volume: "1000",
+        markets: [{
+          id: "market",
+          conditionId: "condition-1",
+          slug: "market",
+          question: "Was the result yes?",
+          description: "",
+          outcomes: ["Yes", "No"],
+          outcomePrices: ["1", "0"],
+          clobTokenIds: ["yes", "no"],
+          active: false,
+          closed: true,
+          acceptingOrders: false,
+          enableOrderBook: true,
+          archived: false,
+          restricted: false,
+          minimumOrderSize: "5",
+          minimumTickSize: "0.01",
+          endDate: null,
+          startDate: "2026-05-01T00:00:00.000Z",
+          createdAt: null,
+          closedTime: "2026-08-01T00:00:00.000Z",
+          liquidity: "100",
+          volume: "1000",
+        }, {
+          id: "legacy-market",
+          conditionId: "condition-legacy",
+          slug: "legacy-market",
+          question: "Was the 2024 result yes?",
+          description: "",
+          outcomes: ["Yes", "No"],
+          outcomePrices: ["1", "0"],
+          clobTokenIds: ["legacy-yes", "legacy-no"],
+          active: false,
+          closed: true,
+          acceptingOrders: false,
+          enableOrderBook: true,
+          archived: false,
+          restricted: false,
+          minimumOrderSize: "5",
+          minimumTickSize: "0.01",
+          endDate: null,
+          startDate: "2024-01-04T00:00:00.000Z",
+          createdAt: null,
+          closedTime: "2024-11-06T00:00:00.000Z",
+          liquidity: "100",
+          volume: "1000",
+        }],
+      }],
+    });
+    mocks.backtestCreate.mockResolvedValue({ run: { ...run, status: "queued", phase: "queued", progress: 0 }, result: null });
+    renderRoute("/backtests/new");
+
+    await user.type(screen.getByRole("textbox", { name: "Search resolved markets" }), "election");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: /Was the result yes/i }));
+    expect(screen.queryByRole("button", { name: /Was the 2024 result yes/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Launch backtest/i }));
+
+    await waitFor(() => expect(mocks.searchMarkets).toHaveBeenCalledWith("election", "resolved", 20));
+    expect(mocks.backtestCreate).toHaveBeenCalledWith("condition-1", expect.objectContaining({ strategy: "momentum_v1" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/backtests/${RUN_ID}`));
+  });
+
+  it("confirms deletion and removes a non-streaming thread", async () => {
+    const user = userEvent.setup();
+    renderRoute(`/chat/${THREAD_A}`);
+    const history = await screen.findByRole("complementary", { name: "Chat history" });
+    await user.click(within(history).getByRole("button", { name: "Delete Election liquidity" }));
+    await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://agent.test", expect.any(Function), THREAD_A));
+    expect(window.confirm).toHaveBeenCalled();
+  });
+});

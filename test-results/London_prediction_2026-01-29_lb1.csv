@@ -1,9 +1,0 @@
-Market Group,Outcome Bucket,Status,Market Creation Date,Start of Day Date,Market Resolution Date,Forecast Max Temp (F),Actual Max Temp (F),Target Fahrenheit,Predicted Probability,Best Entry Price,Entry Time,Resolution,Time Till Resolution,Invested ($),Payout ($),PnL ($),ROI (%)
-Highest temperature in London on 2026-01-28?,6°C or below,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,42.8,5% (0.05),0.01,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,7°C,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,44.6,5% (0.05),0.026,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,8°C,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,46.4,30% (0.3),0.19,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,9°C,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,48.2,95% (0.95),0.54,2026-01-27 17:59,N/A,23h 59m,100.0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,10°C,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,50.0,70% (0.7),0.19,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,11°C,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,51.8,5% (0.05),0.028,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-Highest temperature in London on 2026-01-28?,12°C or higher,UNRESOLVED/ACTIVE,2026-01-26 11:00,2026-01-28 00:00,2026-01-28 23:59,48.8,PENDING,53.6,5% (0.05),0.007,2026-01-27 17:59,N/A,23h 59m,0,N/A,N/A,N/A
-TOTAL SUMMARY,,,,,,,,,,,,,,0,0,0,0

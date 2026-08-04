@@ -1,0 +1,110 @@
+# Architecture
+
+## Services and data ownership
+
+PolyTrade runs a React client, Fastify gateway, FastAPI agent, FastAPI backtest
+control service, Redis, and Celery backtest workers. All persistent services use
+the same externally provisioned PostgreSQL database through the same
+`DATABASE_URL`; production Compose never provisions a database. The schemas
+`polytrade`, `polytrade_agent`, and `polytrade_backtest` are namespaces, not
+security boundaries; one application identity intentionally owns all three.
+
+## Authentication boundary
+
+PolyTrade's standalone React client always authenticates through PolyTrade's
+Clerk instance. The APIs trust that Clerk issuer and can optionally trust a
+second issuer belonging to AssetHero, a separate application. AssetHero access
+is API-only: there is no AssetHero frontend mode or browser bridge in PolyTrade.
+
+When enabled, AssetHero sends short-lived, scoped JWTs for the `polytrade`
+audience. API ownership remains namespaced by issuer, so `assethero:<sub>` and
+`clerk:<sub>` are separate principals even when they represent the same person.
+The optional issuer and JWKS URL must be configured together on the gateway,
+agent, and backtest services.
+
+The gateway is the only startup bootstrapper. Its entrypoint takes an advisory
+lock, enables required extensions, and creates the complete final schema before
+the gateway health check can pass. The other services set their connection
+search path and also schema-qualify persistent repository SQL. This prevents a
+reused pooled connection from writing to a neighboring schema.
+
+## Agent boundary
+
+The agent uses `deepagents==0.7.1` and open-source LangGraph. Its fixed tool
+allowlist contains normalized Polymarket reads, resolved-market search, owned
+backtest creation/status reads, and unsigned order drafting. Filesystem, shell,
+delegation, browser, general search, wallet, and order-mutation tools are blocked.
+
+For a backtest request the agent searches resolved markets first. It presents
+candidates when the request is ambiguous and never invents a condition ID. Once
+the exact market is known, it sends the user's request-scoped research JWT and
+the complete configuration to the backtest API. A successful tool result is
+persisted as a `backtest` thread item and emitted as a typed `backtest.created`
+SSE event. The bearer token is never graph state or checkpoint data.
+
+## Backtest lifecycle
+
+1. `POST /v1/backtests` validates the research JWT, owner, idempotency key, and
+   configuration.
+2. One PostgreSQL transaction inserts the queued run, initial progress, and
+   dispatch-outbox record. One owner may have only one queued/running run.
+3. The API's dispatcher publishes the committed run UUID to Celery using the
+   UUID as the task ID. No JWT, market configuration, or user data enters Redis.
+4. A worker atomically changes that UUID from queued to running. Duplicate or
+   late delivery therefore has no second effect.
+5. The worker validates one resolved binary CLOB V2 market, fee rate, date
+   range, and both one-minute histories. It stores an immutable, canonical,
+   gzip-compressed dataset keyed by SHA-256.
+6. The Decimal engine replays `momentum_v1`, then one transaction stores trades,
+   metrics, downsampleable chart series, and the completed run.
+
+The API polls PostgreSQL for display state. Redis result data is optional and
+short-lived. The outbox loop reconciles undispatched and stale queued/running
+runs after broker loss, duplicate delivery, or worker termination. Celery uses
+late acknowledgement, worker-loss rejection, prefetch one, bounded data retries,
+heartbeats, and soft/hard limits with a longer visibility timeout.
+
+## Deterministic model
+
+`momentum_v1` watches YES and NO independently and selects the outcome whose
+price rises at least 0.05 over 60 minutes. Signals fill at that outcome's next
+observation and expire after five minutes. Entries and early exits use taker
+fills with configurable adverse slippage. Fees use
+`shares × feeRate × price × (1 − price)`, rounded to five decimals. Shares are
+rounded down to six decimals and sizing includes entry fees.
+
+The default position is 10% of current cash/equity, with one open position,
+$0.10 take-profit, $0.05 stop-loss, a 24-hour maximum hold, and a 60-minute
+post-exit cooldown. Positions left open settle at the binary $1/$0 resolution.
+The result includes strategy metrics, YES/NO buy-and-hold benchmarks, the exact
+configuration, assumptions, warnings, trades, and an equity/price replay series.
+
+## Real-order boundary
+
+The gateway remains the only process that can exchange wallet authority for L2
+CLOB credentials or submit/cancel an order. The browser must review and sign an
+exact EIP-712 intent. Backtest components have no dependency on wallet packages
+or gateway mutation routes, and the web Backtests workspace contains no wallet
+or real-order controls.
+
+## Paper-trading boundary
+
+Paper trading is an authenticated gateway feature backed by three tables in the
+`polytrade` schema: one fixed 10,000-USDC account per namespaced principal,
+aggregated long-only outcome positions, and an append-only fill ledger. It uses
+only the existing `research` scope and public Gamma/CLOB reads; it never checks
+geographic eligibility, opens a wallet session, signs an intent, or calls an
+order mutation endpoint.
+
+Quotes sweep visible asks for buys or bids for sells and are all-or-none. The
+preview's worst consumed price becomes a fill-or-kill bound for execution, which
+refetches market metadata, the order book, and token fee rate. Account locking,
+the fill's idempotency key, the cash update, and the position update share one
+PostgreSQL transaction.
+
+The `/paper` workspace refreshes positions on entry and on explicit request.
+Active positions are marked at the best bid net of an estimated exit fee; a
+failed read retains the prior mark as stale. A final 1/0 market result credits
+winning shares at one virtual USDC, credits losing shares at zero, and records
+one idempotent settlement fill. There is no reset, deposit, withdrawal, open
+paper order, automation, or background settlement worker.

@@ -1,0 +1,1484 @@
+import {
+  Activity,
+  ArrowRight,
+  BarChart3,
+  BriefcaseBusiness,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  CircleDot,
+  History,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  WalletCards,
+  X,
+  Zap,
+} from "lucide-react";
+import {
+  createContext,
+  type FormEvent,
+  type MutableRefObject,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Navigate,
+  NavLink,
+  Link,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
+import {
+  createOrderProposalSchema,
+  defaultMomentumBacktestConfig,
+  isBacktestEligibleMarket,
+  momentumBacktestConfigSchema,
+  tradingActionProposalSchema,
+  type AccountOverview,
+  type CancellationSelector,
+  type MarketSearchMarket,
+  type MomentumBacktestConfig,
+  type OrderIntentResponse,
+  type TradingActionProposal,
+  type WalletSessionStatus,
+} from "@polytrade/contracts";
+import type { Hex } from "viem";
+
+import {
+  compactAddress,
+  errorMessage,
+  orderResultMessage,
+  ProposalTicket,
+  type ProposalDraft,
+} from "./App";
+import { GatewayClient, GatewayError, type Eligibility } from "./api";
+import {
+  AgentApiError,
+  createAgentThread,
+  deleteAgentThread,
+  getAgentThreadItems,
+  listAgentThreads,
+  runAgentTurn,
+  type AgentBacktestReference,
+  type AgentThreadSummary,
+} from "./agent";
+import { useAuthentication } from "./auth";
+import { BacktestClient } from "./backtest";
+import { BacktestsWorkspace } from "./Backtests";
+import { env } from "./env";
+import { MarkdownMessage } from "./MarkdownMessage";
+import { PaperWorkspace } from "./Paper";
+import { connectWallet, signTypedPayload, type ConnectedWallet } from "./wallet";
+
+interface DeskMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+}
+
+interface ChatState {
+  messages: DeskMessage[];
+  loaded: boolean;
+  loading: boolean;
+  proposalDraft: ProposalDraft | null;
+  backtest: AgentBacktestReference | null;
+}
+
+interface PendingOrder {
+  createKey: string;
+  intent?: OrderIntentResponse;
+  signature?: Hex;
+}
+
+type BusyAction = "wallet" | "submit" | "account" | "cancel" | null;
+
+interface WorkspaceContextValue {
+  account: AccountOverview | null;
+  activeStreamHasText: boolean;
+  activeStreamThreadId: string | null;
+  authenticationControl: ReactNode;
+  backtests: BacktestClient;
+  busy: BusyAction;
+  chatStates: Record<string, ChatState>;
+  clearProposal: (threadId: string) => void;
+  connectAndVerify: () => Promise<void>;
+  attachLocalSigner: () => Promise<void>;
+  deleteThread: (threadId: string) => Promise<void>;
+  disconnectWallet: () => Promise<void>;
+  eligibility: Eligibility | null;
+  error: string | null;
+  executeProposal: (threadId: string) => Promise<void>;
+  funderAddress: string;
+  gateway: GatewayClient;
+  lastProposalThreadId: string | null;
+  loadThread: (threadId: string) => Promise<void>;
+  localWallet: ConnectedWallet | null;
+  notice: string | null;
+  pendingOrders: Record<string, PendingOrder | undefined>;
+  refreshAccount: () => Promise<void>;
+  refreshEligibility: () => Promise<void>;
+  refreshThreads: () => Promise<AgentThreadSummary[]>;
+  reviewed: Record<string, boolean | undefined>;
+  session: WalletSessionStatus | null;
+  setFunderAddress: (value: string) => void;
+  setMessage: (value: string | null, kind?: "error" | "notice") => void;
+  setReviewed: (threadId: string, value: boolean) => void;
+  setSignatureType: (value: 0 | 1 | 2 | 3) => void;
+  signatureType: 0 | 1 | 2 | 3;
+  submitMessage: (threadId: string | undefined, text: string) => Promise<void>;
+  threads: AgentThreadSummary[];
+  threadsLoaded: boolean;
+  tradeAllowed: boolean;
+  updateProposal: (threadId: string, proposal: TradingActionProposal) => void;
+  cancelOpenOrder: (selector: CancellationSelector) => Promise<void>;
+}
+
+const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+
+const STARTER_QUESTIONS = [
+  "Find active election markets with the most liquidity",
+  "What does the order book imply for the leading Fed market?",
+  "Backtest momentum_v1 on a resolved election market",
+];
+
+const emptyChat = (): ChatState => ({
+  messages: [],
+  loaded: false,
+  loading: false,
+  proposalDraft: null,
+  backtest: null,
+});
+
+export default function RoutedApp() {
+  return (
+    <WorkspaceProvider>
+      <ApplicationShell />
+    </WorkspaceProvider>
+  );
+}
+
+function WorkspaceProvider({ children }: { children: ReactNode }) {
+  const authentication = useAuthentication();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const gateway = useMemo(
+    () => new GatewayClient(env.VITE_GATEWAY_URL, authentication.getToken),
+    [authentication.getToken],
+  );
+  const backtests = useMemo(
+    () => new BacktestClient(env.VITE_BACKTEST_URL, authentication.getToken),
+    [authentication.getToken],
+  );
+  const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
+  const [threadsLoaded, setThreadsLoaded] = useState(false);
+  const [chatStates, setChatStates] = useState<Record<string, ChatState>>({});
+  const [activeStreamHasText, setActiveStreamHasText] = useState(false);
+  const [activeStreamThreadId, setActiveStreamThreadId] = useState<string | null>(null);
+  const [lastProposalThreadId, setLastProposalThreadId] = useState<string | null>(null);
+  const [reviewed, setReviewedState] = useState<Record<string, boolean | undefined>>({});
+  const [pendingOrders, setPendingOrders] = useState<Record<string, PendingOrder | undefined>>({});
+  const [session, setSession] = useState<WalletSessionStatus | null>(null);
+  const [localWallet, setLocalWallet] = useState<ConnectedWallet | null>(null);
+  const [signatureType, setSignatureType] = useState<0 | 1 | 2 | 3>(0);
+  const [funderAddress, setFunderAddress] = useState("");
+  const [eligibility, setEligibility] = useState<Eligibility | null>(null);
+  const [account, setAccount] = useState<AccountOverview | null>(null);
+  const [busy, setBusy] = useState<BusyAction>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const locationRef = useRef(location.pathname);
+  const loadedThreadsRef = useRef(new Set<string>());
+  const loadingThreadsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    locationRef.current = location.pathname;
+  }, [location.pathname]);
+
+  const setMessage = useCallback((value: string | null, kind: "error" | "notice" = "error") => {
+    if (value === null) {
+      setError(null);
+      setNotice(null);
+      return;
+    }
+    if (kind === "error") {
+      setError(value);
+      if (value) setNotice(null);
+    } else {
+      setNotice(value);
+      if (value) setError(null);
+    }
+  }, []);
+
+  const refreshThreads = useCallback(async () => {
+    try {
+      const next = await listAgentThreads(env.VITE_AGENT_URL, authentication.getToken);
+      setThreads(next);
+      return next;
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+      return [];
+    } finally {
+      setThreadsLoaded(true);
+    }
+  }, [authentication.getToken, setMessage]);
+
+  const refreshEligibility = useCallback(async () => {
+    try {
+      setEligibility(await gateway.eligibility());
+    } catch (caught) {
+      setEligibility(null);
+      setMessage(errorMessage(caught));
+    }
+  }, [gateway, setMessage]);
+
+  const refreshAccount = useCallback(async () => {
+    if (!session) return;
+    setBusy((current) => current ?? "account");
+    try {
+      setAccount(await gateway.accountOverview());
+    } catch (caught) {
+      if (caught instanceof GatewayError && caught.status === 404) {
+        setSession(null);
+        setAccount(null);
+        setLocalWallet(null);
+      } else {
+        setMessage(errorMessage(caught));
+      }
+    } finally {
+      setBusy((current) => current === "account" ? null : current);
+    }
+  }, [gateway, session, setMessage]);
+
+  useEffect(() => {
+    void refreshThreads();
+    void refreshEligibility();
+    let cancelled = false;
+    void gateway.currentWalletSession()
+      .then(async (restored) => {
+        if (cancelled) return;
+        setSession(restored);
+        try {
+          const nextAccount = await gateway.accountOverview();
+          if (!cancelled) setAccount(nextAccount);
+        } catch (caught) {
+          if (!cancelled && !(caught instanceof GatewayError && caught.status === 404)) {
+            setMessage(errorMessage(caught));
+          }
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled && !(caught instanceof GatewayError && caught.status === 404)) {
+          setMessage(errorMessage(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gateway, refreshEligibility, refreshThreads, setMessage]);
+
+  useEffect(() => {
+    if (!session) return;
+    const poll = () => {
+      if (document.visibilityState === "visible") void refreshAccount();
+    };
+    const interval = window.setInterval(poll, 30_000);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", poll);
+    };
+  }, [refreshAccount, session]);
+
+  const loadThread = useCallback(async (threadId: string) => {
+    if (loadedThreadsRef.current.has(threadId) || loadingThreadsRef.current.has(threadId)) return;
+    loadingThreadsRef.current.add(threadId);
+    setChatStates((current) => {
+      const existing = current[threadId] ?? emptyChat();
+      return { ...current, [threadId]: { ...existing, loading: true } };
+    });
+    try {
+      const items = await getAgentThreadItems(env.VITE_AGENT_URL, authentication.getToken, threadId);
+      const messages = items
+        .filter((item) => item.kind === "message")
+        .map((item) => ({ id: item.id, role: item.role, text: item.text } satisfies DeskMessage));
+      const proposal = [...items].reverse().find(
+        (item) => item.kind === "proposal" && Date.parse(item.expiresAt) > Date.now(),
+      );
+      const backtest = [...items].reverse().find((item) => item.kind === "backtest");
+      setChatStates((current) => ({
+        ...current,
+        [threadId]: {
+          messages,
+          loaded: true,
+          loading: false,
+          proposalDraft: proposal?.kind === "proposal"
+            ? { proposal: proposal.proposal, expiresAt: proposal.expiresAt }
+            : null,
+          backtest: backtest?.kind === "backtest" ? backtest.backtest : null,
+        },
+      }));
+      loadedThreadsRef.current.add(threadId);
+      if (proposal?.kind === "proposal") setLastProposalThreadId(threadId);
+    } catch (caught) {
+      setChatStates((current) => ({
+        ...current,
+        [threadId]: { ...(current[threadId] ?? emptyChat()), loading: false, loaded: true },
+      }));
+      if (caught instanceof AgentApiError && caught.status === 404) {
+        const next = await refreshThreads();
+        if (locationRef.current === `/chat/${threadId}`) {
+          navigate(next[0] ? `/chat/${next[0].threadId}` : "/chat/new", { replace: true });
+        }
+      } else {
+        setMessage(errorMessage(caught));
+      }
+    } finally {
+      loadingThreadsRef.current.delete(threadId);
+    }
+  }, [authentication.getToken, navigate, refreshThreads, setMessage]);
+
+  const submitMessage = useCallback(async (requestedThreadId: string | undefined, text: string) => {
+    const message = text.trim();
+    if (!message || activeStreamThreadId) return;
+    setError(null);
+    setNotice(null);
+    setActiveStreamHasText(false);
+    setActiveStreamThreadId(requestedThreadId ?? "new");
+    let threadId = requestedThreadId;
+    try {
+      if (!threadId) {
+        threadId = await createAgentThread(env.VITE_AGENT_URL, authentication.getToken);
+        navigate(`/chat/${threadId}`, { replace: true });
+      }
+      let targetThreadId = threadId;
+      loadedThreadsRef.current.add(targetThreadId);
+      setActiveStreamThreadId(targetThreadId);
+      setChatStates((current) => {
+        const state = current[targetThreadId] ?? emptyChat();
+        return {
+          ...current,
+          [targetThreadId]: {
+            ...state,
+            loaded: true,
+            loading: false,
+            messages: [...state.messages, { id: `user-${crypto.randomUUID()}`, role: "user", text: message }],
+          },
+        };
+      });
+      await runAgentTurn({
+        apiUrl: env.VITE_AGENT_URL,
+        getToken: authentication.getToken,
+        threadId: targetThreadId,
+        text: message,
+        handlers: {
+          onThreadId: (replacement) => {
+            if (replacement === targetThreadId) return;
+            const previous = targetThreadId;
+            targetThreadId = replacement;
+            loadedThreadsRef.current.delete(previous);
+            loadedThreadsRef.current.add(replacement);
+            setActiveStreamThreadId(replacement);
+            setChatStates((current) => {
+              const moved = current[previous] ?? emptyChat();
+              const { [previous]: _removed, ...rest } = current;
+              return { ...rest, [replacement]: moved };
+            });
+            navigate(`/chat/${replacement}`, { replace: true });
+          },
+          onMessageStart: (messageId) => {
+            setChatStates((current) => {
+              const state = current[targetThreadId] ?? emptyChat();
+              if (state.messages.some((item) => item.id === messageId)) return current;
+              return {
+                ...current,
+                [targetThreadId]: {
+                  ...state,
+                  messages: [...state.messages, { id: messageId, role: "assistant", text: "" }],
+                },
+              };
+            });
+          },
+          onMessageText: (messageId, value) => {
+            if (value.trim()) setActiveStreamHasText(true);
+            setChatStates((current) => {
+              const state = current[targetThreadId] ?? emptyChat();
+              return {
+                ...current,
+                [targetThreadId]: {
+                  ...state,
+                  messages: state.messages.map((item) => item.id === messageId ? { ...item, text: value } : item),
+                },
+              };
+            });
+          },
+          onProposal: (proposal, expiresAt) => {
+            setChatStates((current) => {
+              const state = current[targetThreadId] ?? emptyChat();
+              return { ...current, [targetThreadId]: { ...state, proposalDraft: { proposal, expiresAt } } };
+            });
+            setPendingOrders((current) => ({ ...current, [targetThreadId]: undefined }));
+            setReviewedState((current) => ({ ...current, [targetThreadId]: false }));
+            setLastProposalThreadId(targetThreadId);
+          },
+          onBacktest: (backtestReference) => {
+            setChatStates((current) => {
+              const state = current[targetThreadId] ?? emptyChat();
+              return { ...current, [targetThreadId]: { ...state, backtest: backtestReference } };
+            });
+            setMessage("Backtest queued. Progress is available in activity and Backtests.", "notice");
+          },
+        },
+      });
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setActiveStreamThreadId(null);
+      setActiveStreamHasText(false);
+      await refreshThreads();
+    }
+  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, setMessage]);
+
+  const deleteThread = useCallback(async (threadId: string) => {
+    if (activeStreamThreadId === threadId) {
+      setMessage("Wait for this thread's active response before deleting it.");
+      return;
+    }
+    try {
+      await deleteAgentThread(env.VITE_AGENT_URL, authentication.getToken, threadId);
+      setChatStates((current) => {
+        const { [threadId]: _removed, ...rest } = current;
+        return rest;
+      });
+      loadedThreadsRef.current.delete(threadId);
+      loadingThreadsRef.current.delete(threadId);
+      const next = await refreshThreads();
+      if (locationRef.current === `/chat/${threadId}`) {
+        navigate(next[0] ? `/chat/${next[0].threadId}` : "/chat/new", { replace: true });
+      }
+      setMessage("Chat deleted.", "notice");
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    }
+  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, setMessage]);
+
+  const connectAndVerify = useCallback(async () => {
+    setBusy("wallet");
+    setError(null);
+    setNotice(null);
+    try {
+      const connected = await connectWallet();
+      const challenge = await gateway.createChallenge({
+        walletAddress: connected.address,
+        signatureType,
+        ...(signatureType === 0 ? {} : { funderAddress }),
+      });
+      const signature = await signTypedPayload(connected, challenge.typedData);
+      const created = await gateway.createWalletSession(challenge.challengeId, signature);
+      setLocalWallet(connected);
+      setSession(created);
+      setAccount(await gateway.accountOverview());
+      setMessage("Wallet verified and locally attached for signing.", "notice");
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }, [funderAddress, gateway, setMessage, signatureType]);
+
+  const attachLocalSigner = useCallback(async () => {
+    if (!session) return;
+    setBusy("wallet");
+    try {
+      const connected = await connectWallet();
+      if (connected.address.toLowerCase() !== session.walletAddress.toLowerCase()) {
+        throw new Error(`Attach ${compactAddress(session.walletAddress)} to enable signing for this session.`);
+      }
+      setLocalWallet(connected);
+      setMessage("Matching browser wallet attached. Signing is enabled for this tab.", "notice");
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }, [session, setMessage]);
+
+  const disconnectWallet = useCallback(async () => {
+    if (!session) return;
+    setBusy("wallet");
+    try {
+      await gateway.revokeWalletSession(session.sessionId);
+      setSession(null);
+      setLocalWallet(null);
+      setAccount(null);
+      setPendingOrders({});
+      setMessage("Wallet session disconnected.", "notice");
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }, [gateway, session, setMessage]);
+
+  const updateProposal = useCallback((threadId: string, proposal: TradingActionProposal) => {
+    const parsed = tradingActionProposalSchema.safeParse(proposal);
+    if (!parsed.success) return;
+    setChatStates((current) => {
+      const state = current[threadId] ?? emptyChat();
+      if (!state.proposalDraft) return current;
+      return {
+        ...current,
+        [threadId]: { ...state, proposalDraft: { ...state.proposalDraft, proposal: parsed.data } },
+      };
+    });
+    setPendingOrders((current) => ({ ...current, [threadId]: undefined }));
+    setReviewedState((current) => ({ ...current, [threadId]: false }));
+  }, []);
+
+  const clearProposal = useCallback((threadId: string) => {
+    setChatStates((current) => {
+      const state = current[threadId] ?? emptyChat();
+      return { ...current, [threadId]: { ...state, proposalDraft: null } };
+    });
+    setPendingOrders((current) => ({ ...current, [threadId]: undefined }));
+    setReviewedState((current) => ({ ...current, [threadId]: false }));
+    setLastProposalThreadId((current) => current === threadId ? null : current);
+  }, []);
+
+  const executeProposal = useCallback(async (threadId: string) => {
+    const draft = chatStates[threadId]?.proposalDraft;
+    const isReviewed = reviewed[threadId] === true;
+    const signerMatches = Boolean(
+      session && localWallet && localWallet.address.toLowerCase() === session.walletAddress.toLowerCase(),
+    );
+    if (!draft || !isReviewed || !session || !localWallet || !signerMatches) return;
+    setBusy("submit");
+    setError(null);
+    setNotice(null);
+    try {
+      const prior = pendingOrders[threadId];
+      if (!prior?.signature && Date.parse(draft.expiresAt) <= Date.now()) {
+        throw new Error("This draft expired. Ask the agent to refresh the market data.");
+      }
+      if (draft.proposal.action === "cancel") {
+        await gateway.cancel(session.sessionId, draft.proposal.selector);
+        setMessage("Cancellation accepted. Account data will refresh with the final state.", "notice");
+      } else {
+        const proposal = createOrderProposalSchema.parse(draft.proposal);
+        let pending = prior ?? { createKey: crypto.randomUUID() };
+        setPendingOrders((current) => ({ ...current, [threadId]: pending }));
+        const intent = pending.intent ?? await gateway.createIntent(session.sessionId, proposal, pending.createKey);
+        pending = { ...pending, intent };
+        setPendingOrders((current) => ({ ...current, [threadId]: pending }));
+        const signature = pending.signature ?? await signTypedPayload(localWallet, intent.typedData);
+        pending = { ...pending, signature };
+        setPendingOrders((current) => ({ ...current, [threadId]: pending }));
+        const result = await gateway.submitIntent(intent.intentId, signature, crypto.randomUUID());
+        setMessage(orderResultMessage(result), "notice");
+      }
+      clearProposal(threadId);
+      setAccount(await gateway.accountOverview());
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }, [chatStates, clearProposal, gateway, localWallet, pendingOrders, reviewed, session, setMessage]);
+
+  const cancelOpenOrder = useCallback(async (selector: CancellationSelector) => {
+    if (!session) return;
+    setBusy("cancel");
+    try {
+      await gateway.cancel(session.sessionId, selector);
+      setMessage("Cancellation accepted.", "notice");
+      setAccount(await gateway.accountOverview());
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }, [gateway, session, setMessage]);
+
+  const value = useMemo<WorkspaceContextValue>(() => ({
+    account,
+    activeStreamHasText,
+    activeStreamThreadId,
+    authenticationControl: authentication.accountControl,
+    backtests,
+    busy,
+    chatStates,
+    clearProposal,
+    connectAndVerify,
+    attachLocalSigner,
+    deleteThread,
+    disconnectWallet,
+    eligibility,
+    error,
+    executeProposal,
+    funderAddress,
+    gateway,
+    lastProposalThreadId,
+    loadThread,
+    localWallet,
+    notice,
+    pendingOrders,
+    refreshAccount,
+    refreshEligibility,
+    refreshThreads,
+    reviewed,
+    session,
+    setFunderAddress,
+    setMessage,
+    setReviewed: (threadId, value) => setReviewedState((current) => ({ ...current, [threadId]: value })),
+    setSignatureType,
+    signatureType,
+    submitMessage,
+    threads,
+    threadsLoaded,
+    tradeAllowed: Boolean(eligibility?.verified && !eligibility.blocked),
+    updateProposal,
+    cancelOpenOrder,
+  }), [
+    account, activeStreamHasText, activeStreamThreadId, authentication.accountControl, attachLocalSigner, backtests, busy,
+    cancelOpenOrder, chatStates, clearProposal, connectAndVerify, deleteThread, disconnectWallet,
+    eligibility, error, executeProposal, funderAddress, gateway, lastProposalThreadId, loadThread,
+    localWallet, notice, pendingOrders, refreshAccount, refreshEligibility, refreshThreads, reviewed,
+    session, setMessage, signatureType, submitMessage, threads, threadsLoaded, updateProposal,
+  ]);
+
+  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+}
+
+function useWorkspace() {
+  const value = useContext(WorkspaceContext);
+  if (!value) throw new Error("Workspace provider is unavailable");
+  return value;
+}
+
+function ApplicationShell() {
+  const workspace = useWorkspace();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => setMenuOpen(false), [location.pathname]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [menuOpen]);
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <Link className="app-brand" to="/chat" aria-label="PolyTrade chat">
+          <span className="brand-glyph" aria-hidden="true"><CircleDot /></span>
+          <span>PolyTrade</span>
+        </Link>
+        <nav className={`app-nav ${menuOpen ? "app-nav-open" : ""}`} aria-label="Primary navigation">
+          <NavLink to="/chat" className={({ isActive }) => isActive ? "nav-active" : ""}><MessageSquare /> Chat</NavLink>
+          <NavLink to="/trades" className={({ isActive }) => isActive ? "nav-active" : ""}><BriefcaseBusiness /> Trades</NavLink>
+          <NavLink to="/paper" className={({ isActive }) => isActive ? "nav-active" : ""}><Activity /> Paper</NavLink>
+          <NavLink to="/backtests" className={({ isActive }) => isActive ? "nav-active" : ""}><BarChart3 /> Backtests</NavLink>
+        </nav>
+        <div className="header-actions">
+          <NavLink className={({ isActive }) => `header-settings ${isActive ? "nav-active" : ""}`} to="/settings">
+            <Settings aria-hidden="true" /><span>Settings</span>
+          </NavLink>
+          <div className="profile-control" aria-label="Profile">{workspace.authenticationControl}</div>
+          <button
+            className="mobile-menu-button"
+            type="button"
+            aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((current) => !current)}
+          >{menuOpen ? <X /> : <Menu />}</button>
+        </div>
+      </header>
+
+      <Routes>
+        <Route path="/" element={<Navigate replace to="/chat" />} />
+        <Route path="/chat" element={<ChatIndex />} />
+        <Route path="/chat/new" element={<ChatPage />} />
+        <Route path="/chat/:threadId" element={<ChatThreadPage />} />
+        <Route path="/trades" element={<TradesPage />} />
+        <Route path="/paper" element={<PaperPage />} />
+        <Route path="/backtests/new" element={<NewBacktestPage />} />
+        <Route path="/backtests/:runId" element={<BacktestsPage />} />
+        <Route path="/backtests" element={<BacktestsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+
+      {(workspace.error || workspace.notice) && (
+        <div className={`toast ${workspace.error ? "toast-error" : "toast-success"}`} role={workspace.error ? "alert" : "status"}>
+          {workspace.error ? <CircleAlert aria-hidden="true" /> : <Check aria-hidden="true" />}
+          <span>{workspace.error ?? workspace.notice}</span>
+          <button type="button" aria-label="Dismiss message" onClick={() => workspace.setMessage(null)}><X /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatIndex() {
+  const { threads, threadsLoaded } = useWorkspace();
+  if (!threadsLoaded) return <PageLoading label="Loading chats" />;
+  return <Navigate replace to={threads[0] ? `/chat/${threads[0].threadId}` : "/chat/new"} />;
+}
+
+function ChatThreadPage() {
+  const { threadId } = useParams();
+  return threadId ? <ChatPage threadId={threadId} /> : <Navigate replace to="/chat/new" />;
+}
+
+function ChatPage({ threadId }: { threadId?: string }) {
+  const workspace = useWorkspace();
+  const [question, setQuestion] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [wideActivity, setWideActivity] = useState(() => window.matchMedia("(min-width: 1200px)").matches);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const activityButtonRef = useRef<HTMLButtonElement>(null);
+  const historyDrawerRef = useRef<HTMLElement>(null);
+  const activityDrawerRef = useRef<HTMLElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    historyButtonRef.current?.focus();
+  }, []);
+  const closeActivity = useCallback(() => {
+    setActivityOpen(false);
+    activityButtonRef.current?.focus();
+  }, []);
+  const state = threadId ? workspace.chatStates[threadId] ?? emptyChat() : { ...emptyChat(), loaded: true };
+
+  useEffect(() => {
+    if (threadId) void workspace.loadThread(threadId);
+  }, [threadId, workspace.loadThread]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [state.messages]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1200px)");
+    const update = () => setWideActivity(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useDrawerKeyboard(historyOpen, closeHistory, historyDrawerRef, historyButtonRef);
+  useDrawerKeyboard(activityOpen, closeActivity, activityDrawerRef, activityButtonRef);
+
+  const submit = (event?: FormEvent) => {
+    event?.preventDefault();
+    const text = question.trim();
+    if (!text || workspace.activeStreamThreadId) return;
+    setQuestion("");
+    void workspace.submitMessage(threadId, text);
+  };
+  const currentStreaming = Boolean(threadId && workspace.activeStreamThreadId === threadId);
+  const awaitingVisibleResponse = currentStreaming && !workspace.activeStreamHasText;
+
+  return (
+    <main className="chat-workspace">
+      <button className="drawer-scrim" type="button" aria-label="Close drawer" hidden={!historyOpen && !activityOpen} onClick={() => { if (historyOpen) closeHistory(); if (activityOpen) closeActivity(); }} />
+      <HistoryPane ref={historyDrawerRef} open={historyOpen} activeThreadId={threadId} onClose={closeHistory} />
+
+      <section className="conversation-pane" aria-labelledby="conversation-heading">
+        <div className="conversation-toolbar">
+          <button ref={historyButtonRef} className="pane-toggle history-toggle" type="button" onClick={() => setHistoryOpen(true)} aria-expanded={historyOpen}>
+            <History /> History
+          </button>
+          <div>
+            <span className="eyebrow">Research workspace</span>
+            <h1 id="conversation-heading">{threadId ? workspace.threads.find((item) => item.threadId === threadId)?.title ?? "Chat" : "New chat"}</h1>
+          </div>
+          <button ref={activityButtonRef} className="pane-toggle activity-toggle" type="button" onClick={() => setActivityOpen(true)} aria-expanded={activityOpen}>
+            <Activity /> Activity
+          </button>
+        </div>
+
+        <div className="message-scroll" aria-live="polite">
+          {state.loading ? <PageLoading label="Loading conversation" compact /> : state.messages.length === 0 ? (
+            <div className="chat-empty">
+              <span className="empty-orbit" aria-hidden="true"><Zap /></span>
+              <h2>Research a market or prepare an action.</h2>
+              <p>Ask about live Polymarket data, your account, or the single supported historical strategy. Orders remain drafts until reviewed and signed.</p>
+              <div className="starter-list" aria-label="Starter prompts">
+                {STARTER_QUESTIONS.map((starter) => (
+                  <button key={starter} type="button" onClick={() => setQuestion(starter)}>
+                    <ArrowRight aria-hidden="true" /> <span>{starter}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="message-list">
+              {state.messages.filter((message) => message.text.trim()).map((message) => (
+                <article className={`chat-message chat-message-${message.role}`} key={message.id}>
+                  <span className="message-label">{message.role === "user" ? "You" : "PolyTrade"}</span>
+                  {message.role === "assistant"
+                    ? <MarkdownMessage source={message.text} />
+                    : <p>{message.text}</p>}
+                </article>
+              ))}
+              {awaitingVisibleResponse && (
+                <div className="stream-status" role="status">
+                  <span className="stream-dot" aria-hidden="true" />
+                  <span className="stream-dot" aria-hidden="true" />
+                  <span className="stream-dot" aria-hidden="true" />
+                  <span className="sr-only">Agent is working</span>
+                </div>
+              )}
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        <form className="composer" onSubmit={submit}>
+          <label className="sr-only" htmlFor="chat-question">Ask PolyTrade</label>
+          <textarea
+            id="chat-question"
+            rows={2}
+            maxLength={2_000}
+            placeholder={workspace.activeStreamThreadId ? "One response is already running…" : "Ask about a market, account, order, or momentum_v1 backtest…"}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            disabled={Boolean(workspace.activeStreamThreadId)}
+          />
+          <div className="composer-footer">
+            <span>{workspace.activeStreamThreadId && workspace.activeStreamThreadId !== threadId ? "Another chat is responding" : "Shift + Enter for a new line"}</span>
+            <button className="send-button" type="submit" disabled={!question.trim() || Boolean(workspace.activeStreamThreadId)}>
+              <Send aria-hidden="true" /><span>Send</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <ActivityPane
+        ref={activityDrawerRef}
+        open={activityOpen}
+        onClose={closeActivity}
+        threadId={threadId}
+        visible={wideActivity || activityOpen}
+      />
+    </main>
+  );
+}
+
+const HistoryPane = function HistoryPane(props: {
+  activeThreadId?: string;
+  onClose: () => void;
+  open: boolean;
+  ref: MutableRefObject<HTMLElement | null>;
+}) {
+  const workspace = useWorkspace();
+  const navigate = useNavigate();
+  return (
+    <aside ref={props.ref} className={`history-pane ${props.open ? "drawer-open" : ""}`} aria-label="Chat history" role={props.open ? "dialog" : undefined} aria-modal={props.open || undefined}>
+      <div className="pane-heading">
+        <div><span className="eyebrow">Workspace</span><h2>Chat history</h2></div>
+        <button className="drawer-close" type="button" onClick={props.onClose} aria-label="Close chat history"><X /></button>
+      </div>
+      <Link className="new-chat-button" to="/chat/new" onClick={props.onClose}><Plus /> New chat</Link>
+      <div className="thread-list">
+        {workspace.threads.length === 0 && workspace.threadsLoaded ? (
+          <p className="pane-empty">No saved conversations yet.</p>
+        ) : workspace.threads.map((thread) => (
+          <div className={`thread-row ${thread.threadId === props.activeThreadId ? "thread-active" : ""}`} key={thread.threadId}>
+            <Link to={`/chat/${thread.threadId}`} onClick={props.onClose}>
+              <span>{thread.title}</span>
+              <small>{workspace.activeStreamThreadId === thread.threadId ? "Responding now" : relativeTime(thread.updatedAt)}</small>
+            </Link>
+            <button
+              type="button"
+              aria-label={`Delete ${thread.title}`}
+              disabled={workspace.activeStreamThreadId === thread.threadId}
+              onClick={() => {
+                if (window.confirm(`Delete “${thread.title}”?`)) void workspace.deleteThread(thread.threadId);
+              }}
+            ><Trash2 /></button>
+          </div>
+        ))}
+      </div>
+      <button className="history-refresh" type="button" onClick={() => void workspace.refreshThreads()}><RefreshCw /> Refresh history</button>
+    </aside>
+  );
+};
+
+const ActivityPane = function ActivityPane(props: {
+  onClose: () => void;
+  open: boolean;
+  ref: MutableRefObject<HTMLElement | null>;
+  threadId?: string;
+  visible: boolean;
+}) {
+  const workspace = useWorkspace();
+  const state = props.threadId ? workspace.chatStates[props.threadId] ?? emptyChat() : emptyChat();
+  const [run, setRun] = useState<AgentBacktestReference | null>(state.backtest);
+  const [pageVisible, setPageVisible] = useState(document.visibilityState === "visible");
+
+  useEffect(() => setRun(state.backtest), [state.backtest]);
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  useEffect(() => {
+    const reference = state.backtest;
+    if (!reference || !props.visible || !pageVisible || !["queued", "running"].includes(reference.status)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const envelope = await workspace.backtests.get(reference.runId);
+        if (!cancelled) {
+          setRun({
+            kind: "backtest_run",
+            runId: envelope.run.runId,
+            marketId: envelope.run.marketId,
+            marketQuestion: envelope.run.marketQuestion,
+            status: envelope.run.status,
+            phase: envelope.run.phase,
+            progress: envelope.run.progress,
+            createdAt: envelope.run.createdAt,
+          });
+        }
+        if (!cancelled && ["queued", "running"].includes(envelope.run.status)) {
+          timer = window.setTimeout(() => void poll(), 3_000);
+        }
+      } catch (caught) {
+        if (!cancelled) workspace.setMessage(errorMessage(caught));
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [pageVisible, props.visible, state.backtest, workspace.backtests, workspace.setMessage]);
+
+  const proposal = state.proposalDraft;
+  const signerReady = Boolean(
+    workspace.session
+    && workspace.localWallet
+    && workspace.session.walletAddress.toLowerCase() === workspace.localWallet.address.toLowerCase(),
+  );
+  return (
+    <aside ref={props.ref} className={`activity-pane ${props.open ? "drawer-open" : ""}`} aria-label="Context and activity" role={props.open ? "dialog" : undefined} aria-modal={props.open || undefined}>
+      <div className="pane-heading">
+        <div><span className="eyebrow">Live context</span><h2>Activity</h2></div>
+        <button className="drawer-close" type="button" onClick={props.onClose} aria-label="Close activity"><X /></button>
+      </div>
+      <div className="activity-tape">
+        {proposal && props.threadId && (
+          <div className="activity-item activity-item-priority">
+            <span className="tape-node" aria-hidden="true" />
+            <ProposalTicket
+              draft={proposal}
+              onChange={(value) => workspace.updateProposal(props.threadId!, value)}
+              onClear={() => workspace.clearProposal(props.threadId!)}
+              onExecute={() => void workspace.executeProposal(props.threadId!)}
+              reviewed={workspace.reviewed[props.threadId] === true}
+              onReviewed={(value) => workspace.setReviewed(props.threadId!, value)}
+              sessionReady={signerReady}
+              tradeAllowed={workspace.tradeAllowed}
+              submitting={workspace.busy === "submit"}
+              pendingSignedOrder={Boolean(workspace.pendingOrders[props.threadId]?.signature)}
+            />
+          </div>
+        )}
+        {run && (
+          <div className="activity-item">
+            <span className="tape-node" aria-hidden="true" />
+            <section className="activity-card">
+              <div className="activity-card-heading"><span className={`status-dot status-${run.status}`} /><span>Backtest · {phaseLabel(run.phase)}</span><strong>{run.progress}%</strong></div>
+              <h3>{run.marketQuestion || compactIdentifier(run.marketId)}</h3>
+              <div className="progress-track"><span style={{ width: `${run.progress}%` }} /></div>
+              <Link to={`/backtests/${run.runId}`}>Open run <ChevronRight /></Link>
+            </section>
+          </div>
+        )}
+        <div className="activity-item">
+          <span className="tape-node" aria-hidden="true" />
+          <AccountSummary account={workspace.account} session={workspace.session} onRefresh={() => void workspace.refreshAccount()} />
+        </div>
+        <div className="activity-item">
+          <span className="tape-node" aria-hidden="true" />
+          <section className="activity-card status-card">
+            <div><ShieldCheck /><span>Eligibility</span><strong>{eligibilityLabel(workspace.eligibility)}</strong></div>
+            <div><WalletCards /><span>Wallet</span><strong>{workspace.session ? "Session active" : "Disconnected"}</strong></div>
+            {workspace.session && !signerReady && <Link to="/settings">Attach browser wallet to sign <ChevronRight /></Link>}
+          </section>
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+function AccountSummary(props: { account: AccountOverview | null; session: WalletSessionStatus | null; onRefresh: () => void }) {
+  return (
+    <section className="activity-card account-summary-card">
+      <div className="activity-card-heading"><span>Account</span><button type="button" onClick={props.onRefresh} disabled={!props.session} aria-label="Refresh account"><RefreshCw /></button></div>
+      {props.session ? (
+        <>
+          <code>{compactAddress(props.session.walletAddress)}</code>
+          <div className="summary-metrics">
+            <span><strong>{props.account?.positions.length ?? "—"}</strong><small>Positions</small></span>
+            <span><strong>{props.account?.openOrders.length ?? "—"}</strong><small>Open</small></span>
+            <span><strong>{props.account?.fills.length ?? "—"}</strong><small>Fills</small></span>
+          </div>
+        </>
+      ) : <p>Connect a wallet in Settings to load account data.</p>}
+    </section>
+  );
+}
+
+function TradesPage() {
+  const workspace = useWorkspace();
+  const proposalThreadId = workspace.lastProposalThreadId;
+  const proposal = proposalThreadId ? workspace.chatStates[proposalThreadId]?.proposalDraft ?? null : null;
+  const signerReady = Boolean(
+    workspace.session && workspace.localWallet
+    && workspace.session.walletAddress.toLowerCase() === workspace.localWallet.address.toLowerCase(),
+  );
+  return (
+    <main className="detail-page trades-page">
+      <PageTitle eyebrow="Account execution" title="Trades" description="Review positions, live orders, fills, and the exact pending action without mixing wallet verification into this page.">
+        <button className="button button-quiet" type="button" onClick={() => void workspace.refreshAccount()} disabled={!workspace.session || Boolean(workspace.busy)}><RefreshCw /> Refresh account</button>
+      </PageTitle>
+      {!workspace.session ? (
+        <section className="empty-page-card"><WalletCards /><h2>No wallet session</h2><p>Wallet connection and verification live in Settings.</p><Link className="button button-primary" to="/settings">Open Settings <ArrowRight /></Link></section>
+      ) : (
+        <>
+          <section className="summary-strip" aria-label="Account summary">
+            <SummaryStat label="Wallet" value={compactAddress(workspace.session.walletAddress)} />
+            <SummaryStat label="Positions" value={workspace.account?.positions.length ?? "—"} />
+            <SummaryStat label="Open orders" value={workspace.account?.openOrders.length ?? "—"} />
+            <SummaryStat label="Fill history" value={workspace.account?.fills.length ?? "—"} />
+            <SummaryStat label="Observed" value={workspace.account ? relativeTime(workspace.account.observedAt) : "—"} />
+          </section>
+          <div className="trades-grid">
+            <div className="trade-data-column">
+              <PositionsTable account={workspace.account} />
+              <OrdersTable account={workspace.account} disabled={workspace.busy === "cancel"} onCancel={(selector) => {
+                if (window.confirm("Cancel this open Polymarket order?")) void workspace.cancelOpenOrder(selector);
+              }} />
+              <FillsTable account={workspace.account} />
+            </div>
+            <aside className="pending-action-column">
+              <ProposalTicket
+                draft={proposal}
+                onChange={(value) => proposalThreadId && workspace.updateProposal(proposalThreadId, value)}
+                onClear={() => proposalThreadId && workspace.clearProposal(proposalThreadId)}
+                onExecute={() => proposalThreadId && void workspace.executeProposal(proposalThreadId)}
+                reviewed={Boolean(proposalThreadId && workspace.reviewed[proposalThreadId])}
+                onReviewed={(value) => proposalThreadId && workspace.setReviewed(proposalThreadId, value)}
+                sessionReady={signerReady}
+                tradeAllowed={workspace.tradeAllowed}
+                submitting={workspace.busy === "submit"}
+                pendingSignedOrder={Boolean(proposalThreadId && workspace.pendingOrders[proposalThreadId]?.signature)}
+              />
+              {!signerReady && <Link className="inline-callout" to="/settings"><ShieldCheck /> Attach the matching browser wallet in Settings before signing.</Link>}
+            </aside>
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+
+function PaperPage() {
+  const workspace = useWorkspace();
+  return (
+    <PaperWorkspace
+      client={workspace.gateway}
+      onError={workspace.setMessage}
+      onNotice={(message) => workspace.setMessage(message, "notice")}
+    />
+  );
+}
+
+function PositionsTable({ account }: { account: AccountOverview | null }) {
+  return (
+    <DataSection title="Positions" count={account?.positions.length ?? 0}>
+      <table><thead><tr><th>Market / outcome</th><th>Size</th><th>Average</th><th>Current</th><th>Value</th><th>P&amp;L</th><th>Status</th></tr></thead><tbody>
+        {account?.positions.map((position) => <tr key={position.positionId}><th>{position.marketTitle || compactIdentifier(position.conditionId || position.positionId)}<small>{position.outcome || "—"}</small></th><td>{valueOrDash(position.size)}</td><td>{price(position.averagePrice)}</td><td>{price(position.currentPrice)}</td><td>{money(position.currentValue)}</td><td className={Number(position.cashPnl) >= 0 ? "value-positive" : "value-negative"}>{money(position.cashPnl)}<small>{percent(position.percentPnl)}</small></td><td><StatusPill value={position.redeemable ? "Redeemable" : "Open"} /></td></tr>)}
+      </tbody></table>
+      {!account?.positions.length && <TableEmpty label="No positions." />}
+    </DataSection>
+  );
+}
+
+function OrdersTable(props: { account: AccountOverview | null; disabled: boolean; onCancel: (selector: CancellationSelector) => void }) {
+  return (
+    <DataSection title="Open orders" count={props.account?.openOrders.length ?? 0}>
+      <table><thead><tr><th>Market / outcome</th><th>Side</th><th>Remaining</th><th>Price</th><th>Type</th><th>Created</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>
+        {props.account?.openOrders.map((order) => <tr key={order.orderId}><th>{compactIdentifier(order.marketId || order.orderId)}<small>{order.outcome || "—"}</small></th><td><StatusPill value={order.side || "—"} /></td><td>{valueOrDash(order.remainingSize)}<small>{valueOrDash(order.matchedSize)} matched</small></td><td>{price(order.price)}</td><td>{order.orderType || "—"}</td><td>{order.createdAt ? formatDate(order.createdAt) : "—"}</td><td><button className="table-action" type="button" disabled={props.disabled} onClick={() => props.onCancel({ kind: "order", orderId: order.orderId })}>Cancel</button></td></tr>)}
+      </tbody></table>
+      {!props.account?.openOrders.length && <TableEmpty label="No open orders." />}
+    </DataSection>
+  );
+}
+
+function FillsTable({ account }: { account: AccountOverview | null }) {
+  return (
+    <DataSection title="Fill history" count={account?.fills.length ?? 0}>
+      <table><thead><tr><th>Trade</th><th>Market / outcome</th><th>Side</th><th>Size</th><th>Price</th><th>Matched</th><th>Role</th><th>Transaction</th></tr></thead><tbody>
+        {account?.fills.map((fill) => <tr key={fill.tradeId}><th>{compactIdentifier(fill.tradeId)}</th><td>{compactIdentifier(fill.marketId || "—")}<small>{fill.outcome || "—"}</small></td><td><StatusPill value={fill.side || "—"} /></td><td>{valueOrDash(fill.size)}</td><td>{price(fill.price)}</td><td>{fill.matchedAt ? formatDate(fill.matchedAt) : "—"}</td><td>{fill.traderSide || "—"}</td><td><code>{fill.transactionHash ? compactIdentifier(fill.transactionHash) : "—"}</code></td></tr>)}
+      </tbody></table>
+      {!account?.fills.length && <TableEmpty label="No fills recorded." />}
+    </DataSection>
+  );
+}
+
+function SettingsPage() {
+  const workspace = useWorkspace();
+  const signerMatches = Boolean(
+    workspace.session && workspace.localWallet
+    && workspace.session.walletAddress.toLowerCase() === workspace.localWallet.address.toLowerCase(),
+  );
+  const restricted = Boolean(!workspace.eligibility?.verified || workspace.eligibility.blocked);
+  return (
+    <main className="detail-page settings-page">
+      <PageTitle eyebrow="Security and access" title="Settings" description="Identity authentication, geographic eligibility, and wallet authority remain separate layers." />
+      <div className="settings-grid">
+        <section className="settings-card">
+          <div className="settings-card-heading"><ShieldCheck /><div><span className="eyebrow">Connection status</span><h2>Eligibility</h2></div></div>
+          <StatusLine label="Geographic check" value={eligibilityLabel(workspace.eligibility)} tone={workspace.tradeAllowed ? "good" : "warn"} />
+          <StatusLine label="Country / region" value={workspace.eligibility ? `${workspace.eligibility.country || "—"} / ${workspace.eligibility.region || "—"}` : "Checking"} />
+          <StatusLine label="Identity" value="Signed in with Clerk" tone="good" />
+          <button className="button button-quiet" type="button" onClick={() => void workspace.refreshEligibility()}><RefreshCw /> Recheck eligibility</button>
+        </section>
+
+        <section className="settings-card settings-card-wide">
+          <div className="settings-card-heading"><WalletCards /><div><span className="eyebrow">Wallet authority</span><h2>{workspace.session ? "Verified session" : "Connect a wallet"}</h2></div></div>
+          {workspace.session ? (
+            <>
+              <div className="session-details">
+                <StatusLine label="Wallet" value={workspace.session.walletAddress} mono />
+                {workspace.session.funderAddress && <StatusLine label="Funder / maker" value={workspace.session.funderAddress} mono />}
+                <StatusLine label="Structure" value={walletTypeLabel(workspace.session.signatureType)} />
+                <StatusLine label="Idle expiry" value={formatDate(workspace.session.idleExpiresAt)} mono />
+                <StatusLine label="Absolute expiry" value={formatDate(workspace.session.expiresAt)} mono />
+                <StatusLine label="Browser signer" value={signerMatches ? "Matching wallet attached" : "Not locally attached"} tone={signerMatches ? "good" : "warn"} />
+              </div>
+              {!signerMatches && <div className="settings-warning"><CircleAlert /><p>Account data can be restored from the server session, but order signing stays disabled until the matching wallet is attached in this browser.</p></div>}
+              <div className="settings-actions">
+                {!signerMatches && <button className="button button-primary" type="button" onClick={() => void workspace.attachLocalSigner()} disabled={workspace.busy === "wallet"}><WalletCards /> Attach matching wallet</button>}
+                <button className="button button-danger" type="button" onClick={() => void workspace.disconnectWallet()} disabled={workspace.busy === "wallet"}><LogOut /> Disconnect session</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="settings-copy">Connect an existing Polygon wallet. PolyTrade asks it to sign a short authentication challenge, then stores only encrypted API credentials server-side.</p>
+              <div className="settings-form">
+                <label><span>Wallet structure</span><select value={workspace.signatureType} onChange={(event) => workspace.setSignatureType(Number(event.target.value) as 0 | 1 | 2 | 3)}><option value={0}>Direct wallet (EOA)</option><option value={1}>Polymarket proxy</option><option value={2}>Safe wallet</option><option value={3}>EIP-1271 wallet</option></select></label>
+                {workspace.signatureType !== 0 && <label><span>Funder / maker address</span><input value={workspace.funderAddress} onChange={(event) => workspace.setFunderAddress(event.target.value)} placeholder="0x…" spellCheck={false} /></label>}
+              </div>
+              <button className="button button-primary" type="button" onClick={() => void workspace.connectAndVerify()} disabled={workspace.busy === "wallet" || restricted || (workspace.signatureType !== 0 && !workspace.funderAddress)}><WalletCards /> {workspace.busy === "wallet" ? "Waiting for wallet…" : "Connect and verify wallet"}</button>
+              {restricted && <p className="restriction-note">Wallet verification for new orders is unavailable until eligibility is verified.</p>}
+            </>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function BacktestsPage() {
+  const { runId } = useParams();
+  const navigate = useNavigate();
+  const workspace = useWorkspace();
+  return (
+    <BacktestsWorkspace
+      client={workspace.backtests}
+      focusedRunId={runId}
+      onSelectRun={(id) => navigate(`/backtests/${id}`)}
+      onNewBacktest={() => navigate("/backtests/new")}
+      onAskAgent={() => navigate("/chat/new")}
+      onError={(message) => workspace.setMessage(message)}
+      onNotice={(message) => workspace.setMessage(message, "notice")}
+    />
+  );
+}
+
+interface BacktestFormState {
+  initialCapital: string;
+  positionSizePct: string;
+  momentumWindowMinutes: string;
+  momentumThreshold: string;
+  takeProfit: string;
+  stopLoss: string;
+  maxHoldMinutes: string;
+  cooldownMinutes: string;
+  slippage: string;
+  maxFillDelayMinutes: string;
+}
+
+function NewBacktestPage() {
+  const workspace = useWorkspace();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<MarketSearchMarket[]>([]);
+  const [selected, setSelected] = useState<MarketSearchMarket | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const defaults = defaultMomentumBacktestConfig;
+  const [form, setForm] = useState<BacktestFormState>({
+    initialCapital: defaults.initialCapital,
+    positionSizePct: defaults.positionSizePct,
+    momentumWindowMinutes: String(defaults.momentumWindowMinutes),
+    momentumThreshold: defaults.momentumThreshold,
+    takeProfit: defaults.takeProfit,
+    stopLoss: defaults.stopLoss,
+    maxHoldMinutes: String(defaults.maxHoldMinutes),
+    cooldownMinutes: String(defaults.cooldownMinutes),
+    slippage: defaults.slippage,
+    maxFillDelayMinutes: String(defaults.maxFillDelayMinutes),
+  });
+  const parsed = momentumBacktestConfigSchema.safeParse(configFromForm(form));
+
+  const search = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true);
+    try {
+      const response = await workspace.gateway.searchMarkets(query.trim(), "resolved", 20);
+      setResults(response.events.flatMap((eventItem) => eventItem.markets).filter(isBacktestEligibleMarket));
+      setSelected(null);
+    } catch (caught) {
+      workspace.setMessage(errorMessage(caught));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const launch = async () => {
+    if (!selected || !parsed.success) return;
+    setLaunching(true);
+    try {
+      const created = await workspace.backtests.create(selected.conditionId || selected.id, parsed.data);
+      workspace.setMessage("Backtest queued.", "notice");
+      navigate(`/backtests/${created.run.runId}`);
+    } catch (caught) {
+      workspace.setMessage(errorMessage(caught));
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <main className="detail-page new-backtest-page">
+      <PageTitle eyebrow="Strategies / New backtest" title="Launch momentum_v1" description="The supported strategy enters when recent price momentum crosses a threshold, then exits on take-profit, stop-loss, maximum hold, or settlement. Results are hypothetical.">
+        <Link className="button button-quiet" to="/backtests">Back to runs</Link>
+      </PageTitle>
+      <div className="new-backtest-grid">
+        <section className="form-card">
+          <div className="form-section-heading"><span>01</span><div><h2>Resolved market</h2><p>Search resolved binary markets with normalized gateway data.</p></div></div>
+          <form className="market-search" onSubmit={(event) => void search(event)}>
+            <label className="sr-only" htmlFor="market-search">Search resolved markets</label>
+            <Search aria-hidden="true" />
+            <input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search election, Fed, sports…" />
+            <button type="submit" disabled={searching || !query.trim()}>{searching ? "Searching…" : "Search"}</button>
+          </form>
+          <div className="market-results">
+            {results.map((market) => (
+              <button className={selected?.id === market.id ? "market-result-selected" : ""} key={market.id} type="button" onClick={() => setSelected(market)}>
+                <span><strong>{market.question}</strong><small>{market.outcomes.join(" / ")} · resolved {market.closedTime ? formatDate(market.closedTime) : "market"}</small></span>
+                <span>{selected?.id === market.id ? <Check /> : <ChevronRight />}</span>
+              </button>
+            ))}
+            {!results.length && query && !searching && <p className="pane-empty">No eligible markets found. Backtests require resolved binary CLOB V2 markets created on or after April 28, 2026.</p>}
+          </div>
+        </section>
+
+        <section className="form-card">
+          <div className="form-section-heading"><span>02</span><div><h2>Exact configuration</h2><p>Only momentum_v1 is available.</p></div></div>
+          <div className="strategy-lock"><Zap /><span><strong>momentum_v1</strong><small>Single-market, next-observation execution model</small></span><StatusPill value="Selected" /></div>
+          <div className="config-form-grid">
+            <ConfigField label="Starting capital" field="initialCapital" form={form} setForm={setForm} />
+            <ConfigField label="Position size (0–1)" field="positionSizePct" form={form} setForm={setForm} />
+            <ConfigField label="Momentum window (min)" field="momentumWindowMinutes" form={form} setForm={setForm} integer />
+            <ConfigField label="Momentum threshold" field="momentumThreshold" form={form} setForm={setForm} />
+            <ConfigField label="Take profit" field="takeProfit" form={form} setForm={setForm} />
+            <ConfigField label="Stop loss" field="stopLoss" form={form} setForm={setForm} />
+            <ConfigField label="Maximum hold (min)" field="maxHoldMinutes" form={form} setForm={setForm} integer />
+            <ConfigField label="Cooldown (min)" field="cooldownMinutes" form={form} setForm={setForm} integer />
+            <ConfigField label="Slippage / side" field="slippage" form={form} setForm={setForm} />
+            <ConfigField label="Maximum fill delay (min)" field="maxFillDelayMinutes" form={form} setForm={setForm} integer />
+          </div>
+          {!parsed.success && <div className="validation-summary" role="alert"><CircleAlert />{parsed.error.issues[0]?.message ?? "Review the configuration."}</div>}
+          <button className="button button-primary button-wide" type="button" disabled={!selected || !parsed.success || launching} onClick={() => void launch()}>{launching ? "Launching…" : "Launch backtest"} <ArrowRight /></button>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ConfigField(props: {
+  field: keyof BacktestFormState;
+  form: BacktestFormState;
+  integer?: boolean;
+  label: string;
+  setForm: React.Dispatch<React.SetStateAction<BacktestFormState>>;
+}) {
+  return <label><span>{props.label}</span><input inputMode={props.integer ? "numeric" : "decimal"} value={props.form[props.field]} onChange={(event) => props.setForm((current) => ({ ...current, [props.field]: event.target.value }))} /></label>;
+}
+
+function configFromForm(form: BacktestFormState): MomentumBacktestConfig {
+  return {
+    strategy: "momentum_v1",
+    initialCapital: form.initialCapital,
+    positionSizePct: form.positionSizePct,
+    momentumWindowMinutes: Number(form.momentumWindowMinutes),
+    momentumThreshold: form.momentumThreshold,
+    takeProfit: form.takeProfit,
+    stopLoss: form.stopLoss,
+    maxHoldMinutes: Number(form.maxHoldMinutes),
+    cooldownMinutes: Number(form.cooldownMinutes),
+    slippage: form.slippage,
+    maxFillDelayMinutes: Number(form.maxFillDelayMinutes),
+  };
+}
+
+function PageTitle(props: { children?: ReactNode; description: string; eyebrow: string; title: string }) {
+  return <header className="page-title"><div><span className="eyebrow">{props.eyebrow}</span><h1>{props.title}</h1><p>{props.description}</p></div>{props.children && <div className="page-title-actions">{props.children}</div>}</header>;
+}
+
+function DataSection(props: { children: ReactNode; count: number; title: string }) {
+  return <section className="data-section"><header><div><span className="eyebrow">Account ledger</span><h2>{props.title}</h2></div><span className="count-pill">{props.count}</span></header><div className="table-scroll">{props.children}</div></section>;
+}
+
+function TableEmpty({ label }: { label: string }) {
+  return <p className="table-empty">{label}</p>;
+}
+
+function SummaryStat({ label, value }: { label: string; value: number | string }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function StatusPill({ value }: { value: string }) {
+  return <span className={`status-pill status-pill-${value.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{value}</span>;
+}
+
+function StatusLine(props: { label: string; mono?: boolean; tone?: "good" | "warn"; value: string }) {
+  return <div className="status-line"><span>{props.label}</span><strong className={`${props.mono ? "mono" : ""} ${props.tone ? `status-${props.tone}` : ""}`}>{props.value}</strong></div>;
+}
+
+function PageLoading({ compact = false, label }: { compact?: boolean; label: string }) {
+  return <main className={`page-loading ${compact ? "page-loading-compact" : ""}`} role="status"><RefreshCw /><span>{label}</span></main>;
+}
+
+function NotFoundPage() {
+  return <main className="detail-page"><section className="empty-page-card"><CircleAlert /><h1>Page not found</h1><p>This workspace route does not exist.</p><Link className="button button-primary" to="/chat">Return to chat</Link></section></main>;
+}
+
+function useDrawerKeyboard(
+  open: boolean,
+  close: () => void,
+  drawerRef: MutableRefObject<HTMLElement | null>,
+  returnRef: MutableRefObject<HTMLButtonElement | null>,
+) {
+  useEffect(() => {
+    if (!open) return;
+    const drawer = drawerRef.current;
+    const focusable = () => [...(drawer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, textarea, select, [tabindex]:not([tabindex='-1'])") ?? [])];
+    focusable()[0]?.focus();
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+        returnRef.current?.focus();
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handle);
+    return () => document.removeEventListener("keydown", handle);
+  }, [close, drawerRef, open, returnRef]);
+}
+
+function relativeTime(value: string): string {
+  const seconds = Math.round((Date.parse(value) - Date.now()) / 1_000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
+  return formatter.format(Math.round(hours / 24), "day");
+}
+
+function eligibilityLabel(value: Eligibility | null): string {
+  if (!value) return "Checking";
+  if (!value.verified) return "Unverified";
+  return value.blocked ? "Research only" : "Trading eligible";
+}
+
+function walletTypeLabel(value: 0 | 1 | 2 | 3): string {
+  return ["Direct wallet (EOA)", "Polymarket proxy", "Safe wallet", "EIP-1271 wallet"][value] ?? "Unknown";
+}
+
+function compactIdentifier(value: string): string {
+  return value.length <= 22 ? value : `${value.slice(0, 11)}…${value.slice(-7)}`;
+}
+
+function phaseLabel(value: AgentBacktestReference["phase"]): string {
+  return ({ queued: "Queued", fetching: "Fetching", simulating: "Simulating", saving: "Saving", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[value];
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function valueOrDash(value: string | null): string {
+  return value ?? "—";
+}
+
+function price(value: string | null): string {
+  return value === null ? "—" : Number(value).toFixed(4);
+}
+
+function money(value: string | null): string {
+  if (value === null || !Number.isFinite(Number(value))) return "—";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value));
+}
+
+function percent(value: string | null): string {
+  return value === null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(2)}%`;
+}
