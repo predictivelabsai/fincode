@@ -20,6 +20,12 @@ export interface PaperExecutionInput {
   requestHash: string;
   quote: PaperQuote;
   createdAt: Date;
+  strategyGuard?: {
+    strategyId: string;
+    scanId: string;
+    leaseOwner: string;
+    maxPosition: string;
+  };
 }
 
 export type PaperExecutionResult =
@@ -27,7 +33,9 @@ export type PaperExecutionResult =
   | { state: "key_mismatch" }
   | { state: "identity_conflict" }
   | { state: "insufficient_cash" }
-  | { state: "insufficient_shares" };
+  | { state: "insufficient_shares" }
+  | { state: "strategy_stopped" }
+  | { state: "strategy_limit" };
 
 export type PaperRefreshInstruction =
   | {
@@ -185,6 +193,21 @@ export class PostgresPaperStore implements PaperStore {
         return { state: "identity_conflict" };
       }
 
+      if (input.strategyGuard) {
+        const strategy = await client.query(
+          `SELECT strategy_id FROM polytrade.paper_strategies
+           WHERE strategy_id=$1 AND principal_id=$2 AND status='RUNNING'
+             AND scan_id=$3 AND lease_owner=$4 AND lease_until>$5
+           FOR UPDATE`,
+          [input.strategyGuard.strategyId, input.principalId, input.strategyGuard.scanId,
+            input.strategyGuard.leaseOwner, input.createdAt],
+        );
+        if ((strategy.rowCount ?? 0) === 0) {
+          await client.query("ROLLBACK");
+          return { state: "strategy_stopped" };
+        }
+      }
+
       const accountCash = new Decimal(String(accountResult.rows[0]!.cash));
       const quantity = new Decimal(input.quote.shares);
       const cashEffect = new Decimal(input.quote.cashEffect);
@@ -192,6 +215,11 @@ export class PostgresPaperStore implements PaperStore {
 
       if (input.quote.side === "BUY") {
         const debit = cashEffect.negated();
+        const heldShares = new Decimal(position ? String(position.shares) : 0);
+        if (input.strategyGuard && heldShares.plus(quantity).gt(input.strategyGuard.maxPosition)) {
+          await client.query("ROLLBACK");
+          return { state: "strategy_limit" };
+        }
         if (debit.lte(0) || accountCash.lt(debit)) {
           await client.query("ROLLBACK");
           return { state: "insufficient_cash" };

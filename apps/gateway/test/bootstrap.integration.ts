@@ -31,6 +31,7 @@ try {
     owned_schemas: string;
     trigger_count: string;
     paper_trigger_count: string;
+    paper_strategy_trigger_count: string;
     unqualified_audit: string;
   }>(`
     SELECT
@@ -44,19 +45,21 @@ try {
          AND schema_owner = current_user) AS owned_schemas,
       (SELECT count(*) FROM pg_trigger WHERE tgname = 'trading_audit_no_update') AS trigger_count,
       (SELECT count(*) FROM pg_trigger WHERE tgname = 'paper_fills_no_update') AS paper_trigger_count,
+      (SELECT count(*) FROM pg_trigger WHERE tgname = 'paper_strategy_events_no_update') AS paper_strategy_trigger_count,
       to_regclass('trading_audit')::text AS unqualified_audit
   `);
   const row = invariants.rows[0];
   assert.ok(row?.database_name, "current_database() was empty");
   assert.deepEqual(row, {
     database_name: row.database_name,
-    gateway_tables: "10",
+    gateway_tables: "12",
     agent_tables: "6",
     backtest_tables: "8",
     public_tables: "0",
     owned_schemas: "3",
     trigger_count: "1",
     paper_trigger_count: "1",
+    paper_strategy_trigger_count: "1",
     unqualified_audit: "trading_audit",
   });
 

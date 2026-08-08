@@ -9,7 +9,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   paperQuoteRequestSchema,
   type MarketSearchMarket,
@@ -18,9 +18,11 @@ import {
   type PaperPortfolio,
   type PaperQuote,
   type PaperQuoteRequest,
+  type PaperStrategySnapshot,
 } from "@polytrade/contracts";
 
 import { GatewayClient, GatewayError } from "./api";
+import { PaperStrategyRunner } from "./PaperStrategy";
 
 const FILL_PAGE_SIZE = 20;
 
@@ -45,6 +47,8 @@ export function PaperWorkspace(props: {
   const [quoting, setQuoting] = useState(false);
   const [ordering, setOrdering] = useState(false);
   const [orderKey, setOrderKey] = useState<string | null>(null);
+  const [strategySnapshot, setStrategySnapshot] = useState<PaperStrategySnapshot | null>(null);
+  const pollBusyRef = useRef(false);
 
   const loadFills = useCallback(async (offset: number) => {
     try {
@@ -74,10 +78,12 @@ export function PaperWorkspace(props: {
     void Promise.all([
       props.client.refreshPaperPortfolio(),
       props.client.paperFills(FILL_PAGE_SIZE, 0),
-    ]).then(([nextPortfolio, nextFills]) => {
+      props.client.paperStrategy(),
+    ]).then(([nextPortfolio, nextFills, nextStrategy]) => {
       if (cancelled) return;
       setPortfolio(nextPortfolio);
       setFills(nextFills);
+      setStrategySnapshot(nextStrategy);
     }).catch((error: unknown) => {
       if (!cancelled) props.onError(message(error));
     }).finally(() => {
@@ -85,6 +91,34 @@ export function PaperWorkspace(props: {
     });
     return () => { cancelled = true; };
   }, [props.client, props.onError]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      if (pollBusyRef.current) return;
+      pollBusyRef.current = true;
+      try {
+        const [nextPortfolio, nextStrategy, nextFills] = await Promise.all([
+          props.client.paperPortfolio(),
+          props.client.paperStrategy(),
+          fillOffset === 0 ? props.client.paperFills(FILL_PAGE_SIZE, 0) : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setPortfolio(nextPortfolio);
+        setStrategySnapshot(nextStrategy);
+        if (nextFills) setFills(nextFills);
+      } catch {
+        // The next poll retries transient dashboard reads without interrupting an active strategy.
+      } finally {
+        pollBusyRef.current = false;
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [fillOffset, props.client]);
 
   const selectedOutcome = useMemo(() => {
     if (!selectedMarket) return null;
@@ -271,6 +305,16 @@ export function PaperWorkspace(props: {
             )}
             <footer>Price protection uses the preview’s worst consumed level. If the book moves beyond it, the complete order is rejected.</footer>
           </section>
+          <PaperStrategyRunner
+            client={props.client}
+            market={selectedMarket}
+            tokenId={selectedTokenId}
+            portfolio={portfolio}
+            snapshot={strategySnapshot}
+            onSnapshot={setStrategySnapshot}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
         </aside>
       </div>
     </main>

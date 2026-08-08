@@ -7,6 +7,7 @@ import {
   paperOrderResponseSchema,
   paperPortfolioSchema,
   paperQuoteSchema,
+  paperStrategySnapshotSchema,
   walletChallengeResponseSchema,
   walletSessionResponseSchema,
   walletSessionStatusSchema,
@@ -21,6 +22,8 @@ import {
   type PaperPortfolio,
   type PaperQuote,
   type PaperQuoteRequest,
+  type PaperStrategySnapshot,
+  type PaperStrategyStartRequest,
   type WalletChallengeRequest,
   type WalletChallengeResponse,
   type WalletSessionResponse,
@@ -133,6 +136,23 @@ export class GatewayClient {
     const search = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     return this.request(`/v1/paper/fills?${search}`)
       .then((value) => paperFillsResponseSchema.parse(value));
+  }
+
+  paperStrategy(): Promise<PaperStrategySnapshot> {
+    return this.request("/v1/paper/strategy")
+      .then((value) => paperStrategySnapshotSchema.parse(value));
+  }
+
+  startPaperStrategy(body: PaperStrategyStartRequest, idempotencyKey?: string): Promise<PaperStrategySnapshot> {
+    return this.request("/v1/paper/strategy", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, idempotencyKey).then((value) => paperStrategySnapshotSchema.parse(value));
+  }
+
+  stopPaperStrategy(): Promise<PaperStrategySnapshot> {
+    return this.request("/v1/paper/strategy/stop", { method: "POST" })
+      .then((value) => paperStrategySnapshotSchema.parse(value));
   }
 
   createIntent(

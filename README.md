@@ -1,6 +1,6 @@
 # PolyTrade
 
-PolyTrade is a Polymarket research, paper-trading, single-market backtesting,
+PolyTrade is a Polymarket research, continuous paper-trading, single-market backtesting,
 and reviewed real-order application. Natural-language chat can find a resolved
 binary market and queue the deterministic `momentum_v1` replay. Redis and Celery
 provide the asynchronous work queue; PostgreSQL remains the authoritative source
@@ -25,6 +25,7 @@ flowchart LR
     R --> BW["Celery workers"]
     BW -->|"progress + results"| PG
     GW --> PG
+    GW -.->|"leased paper-strategy scans"| GW
     AG --> PG
     GW --> PM["Polymarket public + trading APIs"]
     BW --> PH["Public Gamma + CLOB history APIs"]
@@ -57,8 +58,8 @@ tables.
 
 - `services/agent` — Deep Agent, FastAPI/SSE runtime, encrypted checkpoints, and backtest tools.
 - `services/backtest` — FastAPI control API, Decimal engine, PostgreSQL repositories, and Celery task.
-- `apps/gateway` — Fastify API, resolved/active market search, paper ledger, trading controls, and bootstrap.
-- `apps/web` — React Chat, Trades, Paper, and Backtests workspaces.
+- `apps/gateway` — Fastify API, resolved/active market search, paper ledger and background strategy runner, trading controls, and bootstrap.
+- `apps/web` — React Chat, Trades, continuously updating Paper, and Backtests workspaces.
 - `packages/contracts` — matching browser/gateway Zod contracts.
 
 ## Local setup

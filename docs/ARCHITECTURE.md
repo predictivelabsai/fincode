@@ -89,12 +89,13 @@ or real-order controls.
 
 ## Paper-trading boundary
 
-Paper trading is an authenticated gateway feature backed by three tables in the
+Paper trading is an authenticated gateway feature backed by five tables in the
 `polytrade` schema: one fixed 10,000-USDC account per namespaced principal,
-aggregated long-only outcome positions, and an append-only fill ledger. It uses
-only the existing `research` scope and public Gamma/CLOB reads; it never checks
-geographic eligibility, opens a wallet session, signs an intent, or calls an
-order mutation endpoint.
+aggregated long-only outcome positions, an append-only fill ledger, persistent
+price-band strategy state, and an append-only strategy event tape. It uses only
+the existing `research` scope and public Gamma/CLOB reads; it never checks
+geographic eligibility, opens a wallet session, signs an intent, or calls a
+live-order mutation endpoint.
 
 Quotes sweep visible asks for buys or bids for sells and are all-or-none. The
 preview's worst consumed price becomes a fill-or-kill bound for execution, which
@@ -106,5 +107,16 @@ The `/paper` workspace refreshes positions on entry and on explicit request.
 Active positions are marked at the best bid net of an estimated exit fee; a
 failed read retains the prior mark as stale. A final 1/0 market result credits
 winning shares at one virtual USDC, credits losing shares at zero, and records
-one idempotent settlement fill. There is no reset, deposit, withdrawal, open
-paper order, automation, or background settlement worker.
+one idempotent settlement fill. There is no reset, deposit, withdrawal, or open
+paper order.
+
+A user can start one persistent price-band strategy for a selected outcome.
+The gateway runner claims due scans with PostgreSQL `FOR UPDATE SKIP LOCKED`
+leases, checks exits before entries, and routes every trade through the same
+server-derived quote, fill-or-kill price bound, fee, account lock, and append-only
+fill transaction as a manual paper order. The strategy maximum position is
+rechecked inside that transaction. A stable scan UUID makes a reclaimed lease's
+fill idempotent, and Stop clears future scans; a transaction already committing
+may finish. Each scan refreshes marks and resolution state. The browser polls
+strategy state, portfolio, and fills while `/paper` is open, but the gateway run
+continues when it is closed.

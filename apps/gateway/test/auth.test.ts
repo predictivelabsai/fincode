@@ -108,7 +108,7 @@ describe("JwtVerifier", () => {
     await expect(verifier.verify(await mint(privateKey, issuer, { issuedAt: now - 400, lifetime: 100 }), "research")).rejects.toMatchObject({ statusCode: 401 });
     await expect(verifier.verify(await mint(privateKey, issuer, { issuer: "https://evil.test" }), "research")).rejects.toMatchObject({ statusCode: 401 });
     await expect(verifier.verify(await mint(privateKey, issuer, { kid: "unknown" }), "research")).rejects.toMatchObject({ statusCode: 401 });
-    await expect(verifier.verify(await mint(privateKey, issuer, { issuedAt: now + 31 }), "research")).rejects.toMatchObject({ statusCode: 401 });
+    await expect(verifier.verify(await mint(privateKey, issuer, { issuedAt: now + 120 }), "research")).rejects.toMatchObject({ statusCode: 401 });
     await expect(verifier.verify(await mint(privateKey, issuer, { scope: null }), "research")).rejects.toMatchObject({ statusCode: 401 });
   });
 

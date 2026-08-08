@@ -347,6 +347,66 @@ export const paperFillsResponseSchema = z.object({
   limit: z.number().int().positive(),
 });
 
+export const paperStrategyStartRequestSchema = z.object({
+  conditionId: z.string().min(1).max(200),
+  tokenId,
+  entryPrice: priceString,
+  exitPrice: priceString,
+  sharesPerOrder: positiveDecimalString,
+  maxPosition: positiveDecimalString,
+  intervalSeconds: z.number().int().min(5).max(3_600),
+}).superRefine((value, ctx) => {
+  if (Number(value.entryPrice) >= Number(value.exitPrice)) {
+    ctx.addIssue({ code: "custom", path: ["exitPrice"], message: "Exit price must be higher than entry price" });
+  }
+  if (Number(value.maxPosition) < Number(value.sharesPerOrder)) {
+    ctx.addIssue({ code: "custom", path: ["maxPosition"], message: "Maximum position must allow one complete order" });
+  }
+});
+
+export const paperStrategyStatusSchema = z.enum(["RUNNING", "STOPPED", "FAILED"]);
+export const paperStrategyActionSchema = z.enum(["STARTED", "WAIT", "BUY", "SELL", "ERROR", "STOPPED"]);
+
+export const paperStrategySchema = z.object({
+  strategyId: z.string().uuid(),
+  conditionId: z.string().min(1).max(200),
+  tokenId,
+  marketQuestion: z.string().min(1).max(1_000),
+  outcome: z.string().min(1).max(200),
+  entryPrice: priceString,
+  exitPrice: priceString,
+  sharesPerOrder: positiveDecimalString,
+  maxPosition: positiveDecimalString,
+  intervalSeconds: z.number().int().min(5).max(3_600),
+  status: paperStrategyStatusSchema,
+  ordersPlaced: z.number().int().nonnegative(),
+  scansCompleted: z.number().int().nonnegative(),
+  lastAction: paperStrategyActionSchema,
+  lastMessage: z.string().min(1).max(2_000),
+  lastQuoteSide: sideSchema.nullable(),
+  lastQuotePrice: priceString.nullable(),
+  lastScannedAt: z.string().datetime().nullable(),
+  nextScanAt: z.string().datetime().nullable(),
+  startedAt: z.string().datetime(),
+  stoppedAt: z.string().datetime().nullable(),
+  updatedAt: z.string().datetime(),
+});
+
+export const paperStrategyEventSchema = z.object({
+  eventId: z.string().uuid(),
+  action: paperStrategyActionSchema,
+  message: z.string().min(1).max(2_000),
+  side: sideSchema.nullable(),
+  price: priceString.nullable(),
+  fillId: z.string().uuid().nullable(),
+  createdAt: z.string().datetime(),
+});
+
+export const paperStrategySnapshotSchema = z.object({
+  strategy: paperStrategySchema.nullable(),
+  events: z.array(paperStrategyEventSchema),
+});
+
 export const orderIntentResponseSchema = z.object({
   intentId: z.string().uuid(),
   expiresAt: z.string().datetime(),
@@ -519,6 +579,12 @@ export type PaperFill = z.infer<typeof paperFillSchema>;
 export type PaperPortfolio = z.infer<typeof paperPortfolioSchema>;
 export type PaperOrderResponse = z.infer<typeof paperOrderResponseSchema>;
 export type PaperFillsResponse = z.infer<typeof paperFillsResponseSchema>;
+export type PaperStrategyStartRequest = z.infer<typeof paperStrategyStartRequestSchema>;
+export type PaperStrategyStatus = z.infer<typeof paperStrategyStatusSchema>;
+export type PaperStrategyAction = z.infer<typeof paperStrategyActionSchema>;
+export type PaperStrategy = z.infer<typeof paperStrategySchema>;
+export type PaperStrategyEvent = z.infer<typeof paperStrategyEventSchema>;
+export type PaperStrategySnapshot = z.infer<typeof paperStrategySnapshotSchema>;
 export type CreateIntentRequest = z.infer<typeof createIntentRequestSchema>;
 export type OrderIntentResponse = z.infer<typeof orderIntentResponseSchema>;
 export type TypedData = z.infer<typeof typedDataSchema>;

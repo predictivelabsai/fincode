@@ -6,6 +6,8 @@ import { parseConfig } from "./config.js";
 import { CredentialCipher } from "./crypto.js";
 import { GeoblockService } from "./geoblock.js";
 import { PostgresPaperStore } from "./paper-store.js";
+import { PostgresPaperStrategyStore } from "./paper-strategy-store.js";
+import { PaperStrategyBackgroundRunner, PaperStrategyService } from "./paper-strategy.js";
 import { PaperTradingService } from "./paper.js";
 import { PolymarketAdapter } from "./polymarket.js";
 import { PostgresTradingStore } from "./store.js";
@@ -28,7 +30,14 @@ const geoblock = new GeoblockService(
   config.POLYMARKET_REQUEST_TIMEOUT_MS,
 );
 const trading = new TradingService(config, store, cipher, polymarket, geoblock);
-const paper = new PaperTradingService(new PostgresPaperStore(pool), polymarket);
+const paperStore = new PostgresPaperStore(pool);
+const paper = new PaperTradingService(paperStore, polymarket);
+const paperStrategyStore = new PostgresPaperStrategyStore(pool);
+const paperStrategy = new PaperStrategyService(paperStrategyStore, paper);
+let reportStrategyError: (error: unknown) => void = () => undefined;
+const paperStrategyRunner = new PaperStrategyBackgroundRunner(paperStrategyStore, paper, {
+  onError: (error) => reportStrategyError(error),
+});
 const app = await buildApp({
   config,
   verifier: createJwtVerifier(config),
@@ -36,6 +45,25 @@ const app = await buildApp({
   polymarket,
   trading,
   paper,
+  paperStrategy,
+  paperStrategyRunner,
 });
+reportStrategyError = (error) => app.log.error({ err: error }, "paper strategy runner failed");
+paperStrategyRunner.start();
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  app.log.info({ signal }, "gateway shutdown requested");
+  try {
+    await app.close();
+  } catch (error) {
+    app.log.error({ err: error }, "gateway shutdown failed");
+    process.exitCode = 1;
+  }
+};
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 await app.listen({ host: "0.0.0.0", port: config.PORT });

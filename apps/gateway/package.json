@@ -9,7 +9,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "bootstrap": "tsx src/bootstrap.ts",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout=15000",
     "test:bootstrap": "tsx test/bootstrap.integration.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

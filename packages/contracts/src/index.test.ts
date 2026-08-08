@@ -7,6 +7,8 @@ import {
   paperOrderRequestSchema,
   paperPortfolioSchema,
   paperQuoteSchema,
+  paperStrategySnapshotSchema,
+  paperStrategyStartRequestSchema,
   tradingActionProposalSchema,
   walletSessionStatusSchema,
 } from "./index.js";
@@ -189,5 +191,27 @@ describe("paper trading contracts", () => {
       shares: "1",
       limitPrice: "0.1234567",
     })).toThrow();
+  });
+
+  it("validates bounded background paper strategies and their status snapshot", () => {
+    expect(paperStrategyStartRequestSchema.parse({
+      conditionId: "0xcondition",
+      tokenId: "123",
+      entryPrice: "0.35",
+      exitPrice: "0.65",
+      sharesPerOrder: "10",
+      maxPosition: "50",
+      intervalSeconds: 15,
+    }).maxPosition).toBe("50");
+    expect(() => paperStrategyStartRequestSchema.parse({
+      conditionId: "0xcondition",
+      tokenId: "123",
+      entryPrice: "0.70",
+      exitPrice: "0.60",
+      sharesPerOrder: "10",
+      maxPosition: "5",
+      intervalSeconds: 1,
+    })).toThrow();
+    expect(paperStrategySnapshotSchema.parse({ strategy: null, events: [] })).toEqual({ strategy: null, events: [] });
   });
 });

@@ -33,5 +33,9 @@ describe("empty-database bootstrap", () => {
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_positions/);
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_fills/);
     expect(sql).toMatch(/CREATE TRIGGER paper_fills_no_update/);
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_strategies/);
+    expect(sql).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS paper_strategies_one_running_owner_idx/);
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_strategy_events/);
+    expect(sql).toMatch(/CREATE TRIGGER paper_strategy_events_no_update/);
   });
 });

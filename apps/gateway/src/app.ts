@@ -13,6 +13,8 @@ import {
   paperPortfolioSchema,
   paperQuoteRequestSchema,
   paperQuoteSchema,
+  paperStrategySnapshotSchema,
+  paperStrategyStartRequestSchema,
   submitIntentRequestSchema,
   walletChallengeRequestSchema,
   walletSessionRequestSchema,
@@ -31,6 +33,7 @@ import { z } from "zod";
 import type { JwtVerifier } from "./auth.js";
 import type { GatewayConfig } from "./config.js";
 import { AppError, conflict, forbidden, validation } from "./errors.js";
+import type { PaperStrategyService } from "./paper-strategy.js";
 import type { PaperTradingService } from "./paper.js";
 import type { PolymarketPort } from "./polymarket.js";
 import type { TradingStore } from "./store.js";
@@ -44,6 +47,8 @@ export interface AppDependencies {
   polymarket: PolymarketPort;
   trading: TradingService;
   paper: PaperTradingService;
+  paperStrategy: PaperStrategyService;
+  paperStrategyRunner?: { close(): Promise<void> };
 }
 
 const marketQuery = z.object({
@@ -223,6 +228,26 @@ export async function buildApp(deps: AppDependencies) {
     const query = paperFillsQuery.parse(request.query);
     return deps.paper.fills(principal(request), query.limit, query.offset);
   });
+  app.get("/v1/paper/strategy", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["paper"], response: { 200: paperStrategySnapshotSchema } },
+  }, (request) => deps.paperStrategy.snapshot(principal(request)));
+  app.post("/v1/paper/strategy", {
+    preHandler: authenticate("research"),
+    schema: {
+      tags: ["paper"],
+      body: paperStrategyStartRequestSchema,
+      response: { 200: paperStrategySnapshotSchema },
+    },
+  }, (request) => deps.paperStrategy.start(
+    principal(request),
+    paperStrategyStartRequestSchema.parse(request.body),
+    idempotency(request),
+  ));
+  app.post("/v1/paper/strategy/stop", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["paper"], response: { 200: paperStrategySnapshotSchema } },
+  }, (request) => deps.paperStrategy.stop(principal(request)));
 
   app.post("/v1/wallet-sessions/challenge", { preHandler: authenticate("trade"), schema: { tags: ["wallet"], body: walletChallengeRequestSchema } }, (request) => {
     const body = walletChallengeRequestSchema.parse(request.body);
@@ -292,7 +317,10 @@ export async function buildApp(deps: AppDependencies) {
       deps.trading.cancel(principal(request), body.sessionId, body.selector));
   });
 
-  app.addHook("onClose", async () => deps.store.close());
+  app.addHook("onClose", async () => {
+    await deps.paperStrategyRunner?.close();
+    await deps.store.close();
+  });
   return app;
 }
 

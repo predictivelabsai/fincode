@@ -184,6 +184,82 @@ CREATE TRIGGER paper_fills_no_update
 BEFORE UPDATE OR DELETE ON polytrade.paper_fills
 FOR EACH ROW EXECUTE FUNCTION polytrade.prevent_paper_fill_mutation();
 
+CREATE TABLE IF NOT EXISTS polytrade.paper_strategies (
+    strategy_id uuid PRIMARY KEY,
+    principal_id text NOT NULL REFERENCES polytrade.paper_accounts(principal_id) ON DELETE CASCADE,
+    idempotency_key text NOT NULL,
+    request_hash char(64) NOT NULL,
+    condition_id text NOT NULL,
+    token_id text NOT NULL,
+    market_question text NOT NULL,
+    outcome text NOT NULL,
+    minimum_order_size numeric(24, 6) NOT NULL CHECK (minimum_order_size >= 0),
+    entry_price numeric(12, 6) NOT NULL CHECK (entry_price > 0 AND entry_price <= 1),
+    exit_price numeric(12, 6) NOT NULL CHECK (exit_price > 0 AND exit_price <= 1),
+    shares_per_order numeric(24, 6) NOT NULL CHECK (shares_per_order > 0),
+    max_position numeric(24, 6) NOT NULL CHECK (max_position > 0),
+    interval_seconds integer NOT NULL CHECK (interval_seconds BETWEEN 5 AND 3600),
+    status text NOT NULL CHECK (status IN ('RUNNING', 'STOPPED', 'FAILED')),
+    orders_placed integer NOT NULL DEFAULT 0 CHECK (orders_placed >= 0),
+    scans_completed integer NOT NULL DEFAULT 0 CHECK (scans_completed >= 0),
+    last_action text NOT NULL DEFAULT 'STARTED'
+        CHECK (last_action IN ('STARTED', 'WAIT', 'BUY', 'SELL', 'ERROR', 'STOPPED')),
+    last_message text NOT NULL,
+    last_quote_side text CHECK (last_quote_side IN ('BUY', 'SELL')),
+    last_quote_price numeric(12, 6) CHECK (last_quote_price > 0 AND last_quote_price <= 1),
+    last_scanned_at timestamptz,
+    next_scan_at timestamptz,
+    scan_id uuid,
+    lease_owner text,
+    lease_until timestamptz,
+    started_at timestamptz NOT NULL,
+    stopped_at timestamptz,
+    updated_at timestamptz NOT NULL,
+    UNIQUE (principal_id, idempotency_key),
+    CHECK (entry_price < exit_price),
+    CHECK (shares_per_order <= max_position),
+    CHECK (
+        (status = 'RUNNING' AND stopped_at IS NULL AND next_scan_at IS NOT NULL)
+        OR (status <> 'RUNNING' AND stopped_at IS NOT NULL AND next_scan_at IS NULL)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS paper_strategies_one_running_owner_idx
+    ON polytrade.paper_strategies (principal_id)
+    WHERE status = 'RUNNING';
+
+CREATE INDEX IF NOT EXISTS paper_strategies_due_idx
+    ON polytrade.paper_strategies (next_scan_at)
+    WHERE status = 'RUNNING';
+
+CREATE TABLE IF NOT EXISTS polytrade.paper_strategy_events (
+    event_id uuid PRIMARY KEY,
+    strategy_id uuid NOT NULL REFERENCES polytrade.paper_strategies(strategy_id) ON DELETE CASCADE,
+    scan_id uuid,
+    action text NOT NULL CHECK (action IN ('STARTED', 'WAIT', 'BUY', 'SELL', 'ERROR', 'STOPPED')),
+    message text NOT NULL,
+    side text CHECK (side IN ('BUY', 'SELL')),
+    price numeric(12, 6) CHECK (price > 0 AND price <= 1),
+    fill_id uuid REFERENCES polytrade.paper_fills(id),
+    created_at timestamptz NOT NULL,
+    UNIQUE (strategy_id, scan_id)
+);
+
+CREATE INDEX IF NOT EXISTS paper_strategy_events_strategy_created_idx
+    ON polytrade.paper_strategy_events (strategy_id, created_at DESC, event_id DESC);
+
+CREATE OR REPLACE FUNCTION polytrade.prevent_paper_strategy_event_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'paper_strategy_events is append-only';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS paper_strategy_events_no_update ON polytrade.paper_strategy_events;
+CREATE TRIGGER paper_strategy_events_no_update
+BEFORE UPDATE OR DELETE ON polytrade.paper_strategy_events
+FOR EACH ROW EXECUTE FUNCTION polytrade.prevent_paper_strategy_event_mutation();
+
 CREATE TABLE IF NOT EXISTS polytrade_agent.agent_threads (
     thread_id uuid PRIMARY KEY,
     principal_id text NOT NULL,

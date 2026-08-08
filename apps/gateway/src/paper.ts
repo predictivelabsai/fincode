@@ -49,6 +49,44 @@ export class PaperTradingService {
     request: PaperOrderRequest,
     idempotencyKey: string,
   ): Promise<PaperOrderResponse> {
+    return this.executeOrder(principal, request, idempotencyKey);
+  }
+
+  async strategyOrder(
+    principal: Principal,
+    request: PaperOrderRequest,
+    idempotencyKey: string,
+    strategyGuard: NonNullable<Parameters<PaperStore["execute"]>[0]["strategyGuard"]>,
+  ): Promise<PaperOrderResponse> {
+    return this.executeOrder(principal, request, idempotencyKey, strategyGuard);
+  }
+
+  async strategyTarget(conditionId: string, tokenId: string): Promise<{
+    conditionId: string;
+    tokenId: string;
+    marketQuestion: string;
+    outcome: string;
+    minimumOrderSize: string;
+  }> {
+    const snapshot = await this.polymarket.getMarketByCondition(conditionId);
+    const identity = validatePaperMarket(snapshot.market, {
+      conditionId,
+      tokenId,
+      side: "BUY",
+      shares: "1",
+    });
+    return {
+      ...identity,
+      minimumOrderSize: decimalMarketValue(snapshot.market.minimumOrderSize, "minimum order size").toFixed(6),
+    };
+  }
+
+  private async executeOrder(
+    principal: Principal,
+    request: PaperOrderRequest,
+    idempotencyKey: string,
+    strategyGuard?: NonNullable<Parameters<PaperStore["execute"]>[0]["strategyGuard"]>,
+  ): Promise<PaperOrderResponse> {
     const requestHash = paperRequestHash(request);
     const replay = await this.store.replay(principal.id, idempotencyKey, requestHash);
     if (replay) return this.orderResult(principal, replay);
@@ -60,6 +98,7 @@ export class PaperTradingService {
       requestHash,
       quote,
       createdAt: this.now(),
+      strategyGuard,
     });
     return this.orderResult(principal, result);
   }
@@ -203,6 +242,10 @@ export class PaperTradingService {
         throw paperConflict("PAPER_INSUFFICIENT_CASH", "The paper account does not have enough cash for this fill");
       case "insufficient_shares":
         throw paperConflict("PAPER_INSUFFICIENT_SHARES", "The paper account does not own enough shares to sell");
+      case "strategy_stopped":
+        throw paperConflict("PAPER_STRATEGY_STOPPED", "The paper strategy stopped before this fill could be committed");
+      case "strategy_limit":
+        throw paperConflict("PAPER_STRATEGY_POSITION_LIMIT", "The strategy maximum position would be exceeded");
     }
   }
 }

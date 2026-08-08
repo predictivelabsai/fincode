@@ -135,6 +135,12 @@ async function setup(trustedProxies?: string) {
     refresh: async () => emptyPaperPortfolio,
     fills: async (_principal: Principal, limit: number, offset: number) => ({ items: [], total: 0, limit, offset }),
   };
+  const emptyPaperStrategy = { strategy: null, events: [] };
+  const paperStrategy = {
+    snapshot: async () => emptyPaperStrategy,
+    start: async () => emptyPaperStrategy,
+    stop: async () => emptyPaperStrategy,
+  };
   const app = await buildApp({
     config: config(trustedProxies),
     verifier: { verifyAuthorization: async (_header: string | undefined, scope: string) => {
@@ -145,6 +151,7 @@ async function setup(trustedProxies?: string) {
     polymarket,
     trading: trading as never,
     paper: paper as never,
+    paperStrategy: paperStrategy as never,
   });
   await app.ready();
   return {
@@ -232,6 +239,9 @@ describe("gateway HTTP boundary", () => {
     expect(specification.paths["/v1/paper/quotes"]?.post?.requestBody).toBeDefined();
     expect(specification.paths["/v1/paper/orders"]?.post?.requestBody).toBeDefined();
     expect(specification.paths["/v1/paper/portfolio"]?.get).toBeDefined();
+    expect(specification.paths["/v1/paper/strategy"]?.get).toBeDefined();
+    expect(specification.paths["/v1/paper/strategy"]?.post?.requestBody).toBeDefined();
+    expect(specification.paths["/v1/paper/strategy/stop"]?.post).toBeDefined();
     await app.close();
   });
 
@@ -258,9 +268,30 @@ describe("gateway HTTP boundary", () => {
       headers: { authorization: "Bearer token" },
     });
     const fills = await app.inject({ method: "GET", url: "/v1/paper/fills?limit=10&offset=0", headers });
+    const strategy = await app.inject({ method: "GET", url: "/v1/paper/strategy", headers });
+    const strategyStart = await app.inject({
+      method: "POST",
+      url: "/v1/paper/strategy",
+      headers: { ...headers, "idempotency-key": "paper-strategy-key-1" },
+      payload: {
+        conditionId: "0xcondition",
+        tokenId: "123",
+        entryPrice: "0.35",
+        exitPrice: "0.65",
+        sharesPerOrder: "10",
+        maxPosition: "50",
+        intervalSeconds: 15,
+      },
+    });
+    const strategyStop = await app.inject({
+      method: "POST",
+      url: "/v1/paper/strategy/stop",
+      headers: { authorization: "Bearer token" },
+    });
 
-    expect([portfolio, quote, order, refresh, fills].map((response) => response.statusCode)).toEqual([200, 200, 200, 200, 200]);
-    expect(verifiedScopes).toEqual(["research", "research", "research", "research", "research"]);
+    expect([portfolio, quote, order, refresh, fills, strategy, strategyStart, strategyStop]
+      .map((response) => response.statusCode)).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
+    expect(verifiedScopes).toEqual(["research", "research", "research", "research", "research", "research", "research", "research"]);
     expect(challengeCalls()).toBe(0);
     expect(observedIp()).toBe("");
     await app.close();

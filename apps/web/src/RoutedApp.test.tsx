@@ -36,9 +36,12 @@ const mocks = vi.hoisted(() => {
     paperOrder: vi.fn(),
     paperPortfolio: vi.fn(),
     paperQuote: vi.fn(),
+    paperStrategy: vi.fn(),
     refreshPaperPortfolio: vi.fn(),
     runAgentTurn: vi.fn(),
     searchMarkets: vi.fn(),
+    startPaperStrategy: vi.fn(),
+    stopPaperStrategy: vi.fn(),
   };
 });
 
@@ -80,9 +83,12 @@ vi.mock("./api", () => ({
     searchMarkets = mocks.searchMarkets;
     paperPortfolio = mocks.paperPortfolio;
     paperQuote = mocks.paperQuote;
+    paperStrategy = mocks.paperStrategy;
     paperOrder = mocks.paperOrder;
     refreshPaperPortfolio = mocks.refreshPaperPortfolio;
     paperFills = mocks.paperFills;
+    startPaperStrategy = mocks.startPaperStrategy;
+    stopPaperStrategy = mocks.stopPaperStrategy;
     createChallenge = vi.fn();
     createWalletSession = vi.fn();
     revokeWalletSession = vi.fn();
@@ -206,6 +212,41 @@ const paperFill = {
   observedAt: "2026-08-04T00:00:00.000Z",
   createdAt: "2026-08-04T00:00:00.000Z",
 };
+const runningPaperStrategy = {
+  strategy: {
+    strategyId: "66666666-6666-4666-8666-666666666666",
+    conditionId: "paper-condition",
+    tokenId: "123",
+    marketQuestion: "Will the paper workspace pass?",
+    outcome: "Yes",
+    entryPrice: "0.380000",
+    exitPrice: "0.450000",
+    sharesPerOrder: "10.000000",
+    maxPosition: "50.000000",
+    intervalSeconds: 15,
+    status: "RUNNING" as const,
+    ordersPlaced: 0,
+    scansCompleted: 0,
+    lastAction: "STARTED" as const,
+    lastMessage: "Strategy started. Waiting for the background runner.",
+    lastQuoteSide: null,
+    lastQuotePrice: null,
+    lastScannedAt: null,
+    nextScanAt: "2026-08-04T00:00:15.000Z",
+    startedAt: "2026-08-04T00:00:00.000Z",
+    stoppedAt: null,
+    updatedAt: "2026-08-04T00:00:00.000Z",
+  },
+  events: [{
+    eventId: "77777777-7777-4777-8777-777777777777",
+    action: "STARTED" as const,
+    message: "Watching Yes in the background.",
+    side: null,
+    price: null,
+    fillId: null,
+    createdAt: "2026-08-04T00:00:00.000Z",
+  }],
+};
 const run = {
   runId: RUN_ID,
   marketId: "condition-1",
@@ -278,6 +319,19 @@ beforeEach(() => {
   mocks.paperFills.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   mocks.paperQuote.mockResolvedValue(paperQuote);
   mocks.paperOrder.mockResolvedValue({ fill: paperFill, portfolio: paperPortfolio });
+  mocks.paperStrategy.mockResolvedValue({ strategy: null, events: [] });
+  mocks.startPaperStrategy.mockImplementation(async () => {
+    mocks.paperStrategy.mockResolvedValue(runningPaperStrategy);
+    return runningPaperStrategy;
+  });
+  mocks.stopPaperStrategy.mockImplementation(async () => {
+    const stopped = {
+      strategy: { ...runningPaperStrategy.strategy, status: "STOPPED" as const, lastAction: "STOPPED" as const, lastMessage: "Strategy stopped by the user.", nextScanAt: null, stoppedAt: "2026-08-04T00:01:00.000Z" },
+      events: runningPaperStrategy.events,
+    };
+    mocks.paperStrategy.mockResolvedValue(stopped);
+    return stopped;
+  });
   mocks.backtestList.mockResolvedValue([]);
   mocks.backtestGet.mockResolvedValue({ run, result: null });
   mocks.attachWallet.mockResolvedValue({ address: WALLET, provider: {} });
@@ -465,6 +519,50 @@ describe("routed workspace", () => {
       shares: "10",
       limitPrice: "0.420000",
     }, expect.any(String)));
+    expect(mocks.attachWallet).not.toHaveBeenCalled();
+  });
+
+  it("starts and stops a persistent background paper strategy", async () => {
+    const user = userEvent.setup();
+    mocks.searchMarkets.mockResolvedValue({
+      query: "paper",
+      state: "active",
+      observedAt: "2026-08-04T00:00:00.000Z",
+      events: [{
+        id: "paper-event",
+        slug: "paper-event",
+        title: "Paper event",
+        description: "",
+        endDate: null,
+        liquidity: "1000",
+        volume: "5000",
+        markets: [paperMarket],
+      }],
+    });
+    renderRoute("/paper");
+
+    await screen.findByRole("heading", { name: "Paper trading" });
+    await user.type(screen.getByRole("textbox", { name: "Search active Polymarket markets" }), "paper");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: /Will the paper workspace pass/i }));
+
+    expect(await screen.findByLabelText("Strategy buy price")).toHaveValue("0.38");
+    await user.click(screen.getByRole("button", { name: /Start in background/i }));
+
+    await waitFor(() => expect(mocks.startPaperStrategy).toHaveBeenCalledWith({
+      conditionId: "paper-condition",
+      tokenId: "123",
+      entryPrice: "0.38",
+      exitPrice: "0.45",
+      sharesPerOrder: "10",
+      maxPosition: "50",
+      intervalSeconds: 15,
+    }, expect.any(String)));
+    expect(await screen.findByText("Background runner active")).toBeInTheDocument();
+    expect(screen.getByText("Runs on the gateway after this page closes. Stop prevents future scans; a fill already being committed may still finish.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Stop strategy/i }));
+    await waitFor(() => expect(mocks.stopPaperStrategy).toHaveBeenCalledOnce());
     expect(mocks.attachWallet).not.toHaveBeenCalled();
   });
 

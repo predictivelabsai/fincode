@@ -32,6 +32,11 @@ namespaced virtual ledger, not a wallet or CLOB account. Paper execution has its
 own atomic idempotency record in the append-only fill row, serializes cash and
 position updates with an account lock, and rejects negative cash, short sales,
 partial fills, stale price bounds, and mismatched market/token identities.
+Persistent paper strategies keep the same boundary. PostgreSQL leases prevent
+multiple gateway replicas from running one scan, deterministic scan keys prevent
+duplicate fills after lease recovery, and the strategy's running state and
+maximum position are rechecked in the ledger transaction. The background runner
+receives no wallet credentials and cannot call live-order or geoblock code.
 
 Immutable normalized datasets use canonical JSON, deterministic gzip metadata,
 and a SHA-256 key. Decimal calculations avoid binary floating-point execution

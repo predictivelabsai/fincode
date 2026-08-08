@@ -22,6 +22,13 @@ Compose starts components in this order:
 3. The backtest API, workers, and agent start with the same `DATABASE_URL`.
 4. The web application starts after all public APIs are ready.
 
+The gateway also owns the persistent paper-strategy runner. Keep at least one
+gateway replica running for due scans to execute. Multiple replicas are safe:
+PostgreSQL leases and `SKIP LOCKED` claims ensure one owner per scan. Monitor
+strategies whose `lease_until` repeatedly expires, `last_action='ERROR'`, or
+`next_scan_at` remains overdue. Graceful gateway shutdown waits for claimed
+scans before closing the shared database pool.
+
 Compose connects only to the existing remote database supplied through
 `DATABASE_URL`; this rule also applies to local application runs. Do not add
 another database, role, or URL for the agent or backtester. The remote database
