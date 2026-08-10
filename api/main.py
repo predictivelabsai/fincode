@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -48,7 +48,10 @@ from api.security import (
     require_admin,
     require_chat_reader,
     require_chat_writer,
+    require_run_reader,
     require_trade_reader,
+    resolve_run_attribution,
+    resolve_run_filters,
 )
 from chat.events import (
     MESSAGE_COMPLETED,
@@ -84,7 +87,13 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-User-Id",
+        "X-User-Source",
+    ],
     expose_headers=["Idempotency-Key", "X-Persistence-Mode"],
 )
 
@@ -514,11 +523,20 @@ async def get_snapshots_endpoint(
 @app.get("/runs")
 async def list_runs(
     limit: int = Query(20, ge=1, le=200),
-    _principal: Principal = Depends(require_admin),
+    principal_id: Optional[str] = Query(None, max_length=100),
+    source: Optional[str] = Query(None, max_length=20),
+    principal: Principal = Depends(require_run_reader),
 ):
+    filters = resolve_run_filters(principal, principal_id, source)
     try:
         from db.repository import get_runs
-        return {"runs": await get_runs(limit=limit)}
+        return {
+            "runs": await get_runs(
+                limit=limit,
+                principal_id=filters.principal_id,
+                source=filters.source,
+            )
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"DB error: {exc}")
 
@@ -526,11 +544,18 @@ async def list_runs(
 @app.get("/runs/{run_id}")
 async def get_run_detail(
     run_id: str,
-    _principal: Principal = Depends(require_admin),
+    principal_id: Optional[str] = Query(None, max_length=100),
+    source: Optional[str] = Query(None, max_length=20),
+    principal: Principal = Depends(require_run_reader),
 ):
+    filters = resolve_run_filters(principal, principal_id, source)
     try:
         from db.repository import get_run
-        run = await get_run(run_id)
+        run = await get_run(
+            run_id,
+            principal_id=filters.principal_id,
+            source=filters.source,
+        )
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
         return run
@@ -548,9 +573,13 @@ async def get_run_detail(
 async def run_backtest_endpoint(
     req: BacktestRequest,
     principal: Principal = Depends(require_chat_writer),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_user_source: Optional[str] = Header(None, alias="X-User-Source"),
 ):
     """Run a weather backtest/prediction and save trades to DB."""
     from datetime import timedelta
+
+    attribution = resolve_run_attribution(principal, x_user_id, x_user_source)
 
     pm_client = PolymarketClient()
     vc_client = VisualCrossingClient()
@@ -575,7 +604,10 @@ async def run_backtest_endpoint(
         from db.repository import create_run
         run_id = await create_run(
             f"{mode}:{req.city}:{target}:lb{req.lookback_days}",
-            "backtest_engine", "local",
+            "backtest_engine",
+            "local",
+            attribution.principal_id,
+            attribution.source,
         )
     except Exception:
         pass
@@ -594,7 +626,7 @@ async def run_backtest_endpoint(
         try:
             from db.repository import save_backtest_trades, finish_run, save_pnl_snapshot
             saved = await save_backtest_trades(
-                run_id, result, req.city, user_id=principal.user_id
+                run_id, result, req.city, user_id=attribution.principal_id
             )
             if run_id:
                 await finish_run(run_id, 1, [{"tool": "backtest_engine"}])

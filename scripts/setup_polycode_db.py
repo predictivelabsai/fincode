@@ -51,6 +51,8 @@ SET search_path TO {SCHEMA}, public;
 -- ── runs ────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.runs (
     run_id        UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    principal_id  TEXT,
+    source        TEXT          DEFAULT 'native',
     query         TEXT          NOT NULL,
     model         VARCHAR(100),
     provider      VARCHAR(50),
@@ -61,6 +63,12 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.runs (
     finished_at   TIMESTAMPTZ,
     error_message TEXT
 );
+
+-- Existing installations may predate run attribution.
+ALTER TABLE {SCHEMA}.runs
+    ADD COLUMN IF NOT EXISTS principal_id TEXT;
+ALTER TABLE {SCHEMA}.runs
+    ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'native';
 
 -- ── trades ──────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.trades (
@@ -117,6 +125,8 @@ CREATE INDEX IF NOT EXISTS idx_pnl_snap_time     ON {SCHEMA}.pnl_snapshots(snaps
 CREATE INDEX IF NOT EXISTS idx_trades_type       ON {SCHEMA}.trades(trade_type);
 CREATE INDEX IF NOT EXISTS idx_runs_status       ON {SCHEMA}.runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at   ON {SCHEMA}.runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_source_principal_started
+    ON {SCHEMA}.runs(source, principal_id, started_at DESC);
 
 -- ── chat_conversations ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.chat_conversations (

@@ -7,7 +7,8 @@ import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Deque, Dict, FrozenSet
+from typing import Deque, Dict, FrozenSet, Optional
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -39,6 +40,102 @@ class Principal:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"code": "insufficient_scope", "message": f"Missing {scope}"},
             )
+
+
+NATIVE_RUN_SOURCE = "native"
+ASSETHERO_RUN_SOURCE = "assethero"
+
+
+@dataclass(frozen=True)
+class RunAttribution:
+    principal_id: str
+    source: str
+
+
+@dataclass(frozen=True)
+class RunFilters:
+    principal_id: Optional[str]
+    source: Optional[str]
+
+
+def _invalid_attribution(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": "invalid_run_attribution", "message": message},
+    )
+
+
+def _assethero_user_id(value: str) -> str:
+    try:
+        return str(UUID(value.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise _invalid_attribution("AssetHero user ID must be a UUID.") from exc
+
+
+def _is_assethero_service(principal: Principal) -> bool:
+    configured_client_id = os.getenv("ASSETHERO_CLIENT_ID", "").strip()
+    return (
+        bool(configured_client_id)
+        and principal.principal_type == "service"
+        and principal.client_id == configured_client_id
+    )
+
+
+def resolve_run_attribution(
+    principal: Principal,
+    delegated_user_id: Optional[str] = None,
+    delegated_source: Optional[str] = None,
+) -> RunAttribution:
+    """Resolve trusted delegation headers to the effective run owner."""
+    if delegated_user_id is None and delegated_source is None:
+        return RunAttribution(principal.user_id, NATIVE_RUN_SOURCE)
+    if delegated_user_id is None or delegated_source is None:
+        raise _invalid_attribution(
+            "X-User-Id and X-User-Source must be supplied together."
+        )
+    if delegated_source.strip().lower() != ASSETHERO_RUN_SOURCE:
+        raise _invalid_attribution("X-User-Source must be assethero.")
+    if not _is_assethero_service(principal):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "assethero_delegation_forbidden",
+                "message": "Only the authenticated AssetHero service may delegate a user.",
+            },
+        )
+    return RunAttribution(
+        principal_id=_assethero_user_id(delegated_user_id),
+        source=ASSETHERO_RUN_SOURCE,
+    )
+
+
+def resolve_run_filters(
+    principal: Principal,
+    requested_principal_id: Optional[str] = None,
+    requested_source: Optional[str] = None,
+) -> RunFilters:
+    """Authorize optional run filters without exposing another user's runs."""
+    if "admin:read" in principal.scopes:
+        source = requested_source.strip().lower() if requested_source else None
+        if source not in {None, NATIVE_RUN_SOURCE, ASSETHERO_RUN_SOURCE}:
+            raise _invalid_attribution("source must be native or assethero.")
+        principal_id = requested_principal_id.strip() if requested_principal_id else None
+        if source == ASSETHERO_RUN_SOURCE and principal_id is not None:
+            principal_id = _assethero_user_id(principal_id)
+        return RunFilters(principal_id=principal_id, source=source)
+
+    if requested_principal_id is None and requested_source is None:
+        return RunFilters(principal_id=principal.user_id, source=NATIVE_RUN_SOURCE)
+    if requested_principal_id is None or requested_source is None:
+        raise _invalid_attribution("principal_id and source must be supplied together.")
+
+    principal_id = requested_principal_id.strip()
+    source = requested_source.strip().lower()
+    if source == NATIVE_RUN_SOURCE and principal_id == principal.user_id:
+        return RunFilters(principal_id=principal_id, source=source)
+
+    delegated = resolve_run_attribution(principal, principal_id, source)
+    return RunFilters(principal_id=delegated.principal_id, source=delegated.source)
 
 
 async def require_principal(
@@ -118,6 +215,14 @@ async def require_chat_reader(
     principal: Principal = Depends(require_principal),
 ) -> Principal:
     principal.require("chat:read")
+    return principal
+
+
+async def require_run_reader(
+    principal: Principal = Depends(require_principal),
+) -> Principal:
+    if "admin:read" not in principal.scopes:
+        principal.require("chat:read")
     return principal
 
 

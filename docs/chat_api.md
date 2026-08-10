@@ -97,6 +97,38 @@ to be in `CORS_ORIGINS` unless its browser also makes separate direct requests
 to the PolyTrade API. Direct browser use of the shared AssetHero token is not
 safe.
 
+### Attribute predictions to an AssetHero user
+
+For prediction and backtest requests, AssetHero's backend delegates ownership
+to the user who initiated the request. Send both headers with the service
+token:
+
+```bash
+curl -X POST https://api.polytrade.chat/backtest \
+  -H "Authorization: Bearer $POLYTRADE_SERVICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H "X-User-Id: $ASSETHERO_USER_ID" \
+  -H 'X-User-Source: assethero' \
+  -d '{"city":"Melbourne","lookback_days":7,"is_prediction":true}'
+```
+
+`X-User-Id` must be the AssetHero user's UUID. The API accepts these headers
+only from the configured AssetHero service principal. Supplying just one
+header, an invalid UUID, or the headers with an ordinary user token fails the
+request. Requests without the headers retain native ownership behavior.
+
+AssetHero can retrieve that user's attributed runs with the same service
+token:
+
+```bash
+curl "https://api.polytrade.chat/runs?source=assethero&principal_id=$ASSETHERO_USER_ID" \
+  -H "Authorization: Bearer $POLYTRADE_SERVICE_TOKEN"
+```
+
+The prediction run detail endpoint is `/runs/{run_id}`. The similarly named
+`/v1/runs/{run_id}` endpoint belongs to the chat API and is not a prediction
+run endpoint.
+
 ## Create a thread
 
 ```bash

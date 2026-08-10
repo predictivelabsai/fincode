@@ -10,16 +10,24 @@ from db.connection import get_pool, _record_to_dict
 # Runs
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def create_run(query: str, model: str, provider: str) -> str:
+async def create_run(
+    query: str,
+    model: str,
+    provider: str,
+    principal_id: Optional[str] = None,
+    source: str = "native",
+) -> str:
     """Insert a new agent-run record; return the run_id string."""
     pool = await get_pool()
     run_id = str(uuid.uuid4())
     await pool.execute(
         """
-        INSERT INTO polycode.runs(run_id, query, model, provider, status)
-        VALUES ($1, $2, $3, $4, 'running')
+        INSERT INTO polycode.runs(
+            run_id, query, model, provider, status, principal_id, source
+        )
+        VALUES ($1, $2, $3, $4, 'running', $5, $6)
         """,
-        run_id, query, model, provider,
+        run_id, query, model, provider, principal_id, source,
     )
     return run_id
 
@@ -44,17 +52,52 @@ async def finish_run(
     )
 
 
-async def get_runs(limit: int = 20) -> List[Dict]:
+async def get_runs(
+    limit: int = 20,
+    principal_id: Optional[str] = None,
+    source: Optional[str] = None,
+) -> List[Dict]:
     pool = await get_pool()
+    conditions: List[str] = []
+    params: List[Any] = []
+    if principal_id is not None:
+        params.append(principal_id)
+        conditions.append(f"principal_id = ${len(params)}")
+    if source is not None:
+        params.append(source)
+        conditions.append(f"source = ${len(params)}")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(limit)
     rows = await pool.fetch(
-        "SELECT * FROM polycode.runs ORDER BY started_at DESC LIMIT $1", limit
+        f"""
+        SELECT * FROM polycode.runs
+        {where}
+        ORDER BY started_at DESC
+        LIMIT ${len(params)}
+        """,
+        *params,
     )
     return [_record_to_dict(r) for r in rows]
 
 
-async def get_run(run_id: str) -> Optional[Dict]:
+async def get_run(
+    run_id: str,
+    principal_id: Optional[str] = None,
+    source: Optional[str] = None,
+) -> Optional[Dict]:
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM polycode.runs WHERE run_id=$1", run_id)
+    conditions = ["run_id = $1"]
+    params: List[Any] = [run_id]
+    if principal_id is not None:
+        params.append(principal_id)
+        conditions.append(f"principal_id = ${len(params)}")
+    if source is not None:
+        params.append(source)
+        conditions.append(f"source = ${len(params)}")
+    row = await pool.fetchrow(
+        f"SELECT * FROM polycode.runs WHERE {' AND '.join(conditions)}",
+        *params,
+    )
     return _record_to_dict(row) if row else None
 
 
