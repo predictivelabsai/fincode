@@ -24,11 +24,12 @@ function config() {
   });
 }
 
-function setup(options: { blocked?: boolean; verifiedIp?: boolean } = {}) {
+function setup(options: { blocked?: boolean; unavailable?: boolean; verifiedIp?: boolean } = {}) {
   const settings = config();
   const store = new MemoryTradingStore();
   const polymarket = new FakePolymarket();
   const geoblock = new GeoblockService("https://polymarket.test/geoblock", 1_000, async (_input, init) => {
+    if (options.unavailable) throw new TypeError("upstream unavailable");
     const headers = new Headers(init?.headers);
     return new Response(JSON.stringify({
       blocked: options.blocked ?? false,
@@ -390,5 +391,21 @@ describe("TradingService", () => {
       walletAddress: account.address,
       signatureType: 0,
     })).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("reports an unavailable eligibility check without enabling real trading", async () => {
+    const unavailable = setup({ unavailable: true });
+
+    await expect(unavailable.service.eligibility("203.0.113.9")).resolves.toMatchObject({
+      blocked: true,
+      ip: "203.0.113.9",
+      country: "",
+      region: "",
+      verified: false,
+    });
+    await expect(unavailable.service.createChallenge(principal, "203.0.113.9", {
+      walletAddress: account.address,
+      signatureType: 0,
+    })).rejects.toMatchObject({ statusCode: 503, code: "UPSTREAM_UNAVAILABLE" });
   });
 });

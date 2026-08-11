@@ -18,6 +18,21 @@ export class GeoblockService {
     private readonly request: typeof fetch = fetch,
   ) {}
 
+  async status(clientIp: string): Promise<Eligibility> {
+    try {
+      return await this.check(clientIp);
+    } catch {
+      return {
+        blocked: true,
+        ip: isIP(clientIp) ? clientIp : "",
+        country: "",
+        region: "",
+        verified: false,
+        checkedAt: new Date().toISOString(),
+      };
+    }
+  }
+
   async check(clientIp: string): Promise<Eligibility> {
     if (!isIP(clientIp)) throw unavailable("Unable to determine a valid client IP");
     let response: Response;

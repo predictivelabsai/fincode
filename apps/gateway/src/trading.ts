@@ -43,7 +43,7 @@ export class TradingService {
   ) {}
 
   eligibility(clientIp: string): Promise<Eligibility> {
-    return this.geoblock.check(clientIp);
+    return this.geoblock.status(clientIp);
   }
 
   async createChallenge(
