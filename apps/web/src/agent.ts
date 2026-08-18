@@ -1,5 +1,6 @@
 import {
   tradingActionProposalSchema,
+  type BacktestStrategy,
   type TradingActionProposal,
 } from "@polytrade/contracts";
 import { z } from "zod";
@@ -31,6 +32,7 @@ export interface AgentBacktestReference {
   runId: string;
   marketId: string;
   marketQuestion?: string | null;
+  strategy: BacktestStrategy;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   phase: "queued" | "fetching" | "simulating" | "saving" | "completed" | "failed" | "cancelled";
   progress: number;
@@ -83,6 +85,7 @@ const backtestReferenceSchema = z.object({
   runId: z.string().uuid(),
   marketId: z.string(),
   marketQuestion: z.string().nullable().optional(),
+  strategy: z.enum(["momentum_v1", "mean_reversion_v1", "breakout_v1"]).default("momentum_v1"),
   status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
   phase: z.enum(["queued", "fetching", "simulating", "saving", "completed", "failed", "cancelled"]),
   progress: z.number().int().min(0).max(100),

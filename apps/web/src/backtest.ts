@@ -4,11 +4,11 @@ import {
   backtestSeriesResponseSchema,
   backtestTradesResponseSchema,
   createBacktestRequestSchema,
+  type BacktestConfig,
   type BacktestRun,
   type BacktestRunEnvelope,
   type BacktestSeriesResponse,
   type BacktestTradesResponse,
-  type MomentumBacktestConfig,
 } from "@polytrade/contracts";
 
 export class BacktestApiError extends Error {
@@ -51,7 +51,7 @@ export class BacktestClient {
     );
   }
 
-  async create(marketId: string, config: MomentumBacktestConfig): Promise<BacktestRunEnvelope> {
+  async create(marketId: string, config: BacktestConfig): Promise<BacktestRunEnvelope> {
     const body = createBacktestRequestSchema.parse({ marketId, config });
     return backtestRunEnvelopeSchema.parse(
       await this.request("/v1/backtests", {

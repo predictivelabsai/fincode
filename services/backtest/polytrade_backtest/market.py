@@ -12,7 +12,7 @@ import httpx
 
 from .config import BacktestSettings
 from .engine import PriceObservation
-from .schemas import MomentumBacktestConfig, Outcome
+from .schemas import BacktestConfig, Outcome, strategy_lookback_minutes
 
 CLOB_V2_START = datetime(2026, 4, 28, tzinfo=UTC)
 # Polymarket rejects one-minute price-history windows longer than roughly two weeks.
@@ -82,7 +82,7 @@ class PolymarketHistoryClient:
     async def fetch_dataset(
         self,
         condition_id: str,
-        config: MomentumBacktestConfig,
+        config: BacktestConfig,
     ) -> HistoricalDataset:
         own_client = self._client is None
         client = self._client or httpx.AsyncClient(
@@ -127,14 +127,7 @@ class PolymarketHistoryClient:
                     "DATASET_TOO_LARGE",
                     "This market exceeds the backtest point limit; choose a narrower date range",
                 )
-            minimum_span = timedelta(minutes=config.momentum_window_minutes + 1)
-            for outcome in ("YES", "NO"):
-                points = histories[outcome]
-                if len(points) < 2 or points[-1].timestamp - points[0].timestamp < minimum_span:
-                    raise MarketDataError(
-                        "INSUFFICIENT_HISTORY",
-                        f"{outcome} does not have enough one-minute history for this strategy",
-                    )
+            validate_dataset_history(histories, config)
             return build_dataset(
                 snapshot,
                 histories,
@@ -314,6 +307,19 @@ class PolymarketHistoryClient:
                 f"Polymarket rejected the data request ({response.status_code})",
             )
         return response
+
+
+def validate_dataset_history(
+    histories: dict[Outcome, list[PriceObservation]], config: BacktestConfig
+) -> None:
+    minimum_span = timedelta(minutes=strategy_lookback_minutes(config) + 1)
+    for outcome in ("YES", "NO"):
+        points = histories.get(outcome, [])
+        if len(points) < 2 or points[-1].timestamp - points[0].timestamp < minimum_span:
+            raise MarketDataError(
+                "INSUFFICIENT_HISTORY",
+                f"{outcome} does not have enough one-minute history for this strategy",
+            )
 
 
 async def _gather_fees(

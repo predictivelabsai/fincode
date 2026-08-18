@@ -7,11 +7,13 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Literal
 
 from .schemas import (
+    BacktestConfig,
     BacktestMetrics,
     BacktestSeriesPoint,
     BacktestTrade,
     MomentumBacktestConfig,
     Outcome,
+    strategy_lookback_minutes,
 )
 
 PRICE_QUANTUM = Decimal("0.00000001")
@@ -70,6 +72,23 @@ def run_momentum_backtest(
     config: MomentumBacktestConfig,
     settlement_at: datetime | None = None,
 ) -> SimulationOutput:
+    return run_backtest(
+        histories,
+        resolved_outcome=resolved_outcome,
+        fee_rate=fee_rate,
+        config=config,
+        settlement_at=settlement_at,
+    )
+
+
+def run_backtest(
+    histories: dict[Outcome, list[PriceObservation]],
+    *,
+    resolved_outcome: Outcome,
+    fee_rate: Decimal,
+    config: BacktestConfig,
+    settlement_at: datetime | None = None,
+) -> SimulationOutput:
     normalized = {outcome: _normalize(points) for outcome, points in histories.items()}
     if not normalized.get("YES") or not normalized.get("NO"):
         raise ValueError("Both YES and NO price histories are required")
@@ -100,11 +119,16 @@ def run_momentum_backtest(
     series: list[BacktestSeriesPoint] = []
     last_timestamp = timestamps[0]
 
-    window = timedelta(minutes=config.momentum_window_minutes)
+    window = timedelta(minutes=strategy_lookback_minutes(config))
     cooldown = timedelta(minutes=config.cooldown_minutes)
     max_hold = timedelta(minutes=config.max_hold_minutes)
     max_delay = timedelta(minutes=config.max_fill_delay_minutes)
-    threshold = Decimal(config.momentum_threshold)
+    if config.strategy == "momentum_v1":
+        threshold = Decimal(config.momentum_threshold)
+    elif config.strategy == "mean_reversion_v1":
+        threshold = Decimal(config.reversion_threshold)
+    else:
+        threshold = Decimal(config.breakout_threshold)
     take_profit = Decimal(config.take_profit)
     stop_loss = Decimal(config.stop_loss)
     slippage = Decimal(config.slippage)
@@ -181,20 +205,16 @@ def run_momentum_backtest(
         if position is None and pending_entry is None:
             cooldown_ready = last_exit_at is None or timestamp >= last_exit_at + cooldown
             if cooldown_ready:
-                candidates: list[tuple[Decimal, Outcome]] = []
-                target = timestamp - window
-                for outcome in ("YES", "NO"):
-                    reference = _reference_price(
-                        seen_times[outcome],
-                        seen_prices[outcome],
-                        target,
-                        max_delay,
-                    )
-                    current = latest.get(outcome)
-                    if reference is not None and current is not None:
-                        momentum = current - reference
-                        if momentum >= threshold:
-                            candidates.append((momentum, outcome))
+                candidates = _entry_candidates(
+                    config.strategy,
+                    timestamp,
+                    window,
+                    threshold,
+                    max_delay,
+                    latest,
+                    seen_times,
+                    seen_prices,
+                )
                 if candidates:
                     candidates.sort(key=lambda item: (-item[0], 0 if item[1] == "YES" else 1))
                     pending_entry = _PendingEntry(outcome=candidates[0][1], signal_at=timestamp)
@@ -280,6 +300,44 @@ def run_momentum_backtest(
     return SimulationOutput(metrics=metrics, trades=trades, series=series)
 
 
+def _entry_candidates(
+    strategy: str,
+    timestamp: datetime,
+    window: timedelta,
+    threshold: Decimal,
+    max_delay: timedelta,
+    latest: dict[Outcome, Decimal],
+    seen_times: dict[Outcome, list[datetime]],
+    seen_prices: dict[Outcome, list[Decimal]],
+) -> list[tuple[Decimal, Outcome]]:
+    candidates: list[tuple[Decimal, Outcome]] = []
+    target = timestamp - window
+    for outcome in ("YES", "NO"):
+        current = latest.get(outcome)
+        if current is None:
+            continue
+        if strategy == "momentum_v1":
+            reference = _reference_price(
+                seen_times[outcome], seen_prices[outcome], target, max_delay
+            )
+            if reference is None:
+                continue
+            signal = current - reference
+        else:
+            prior = _prior_window_prices(
+                seen_times[outcome], seen_prices[outcome], target, max_delay
+            )
+            if prior is None:
+                continue
+            if strategy == "mean_reversion_v1":
+                signal = sum(prior, ZERO) / Decimal(len(prior)) - current
+            else:
+                signal = current - max(prior)
+        if signal >= threshold:
+            candidates.append((signal, outcome))
+    return candidates
+
+
 def fee_for(shares: Decimal, fee_rate: Decimal, price: Decimal) -> Decimal:
     return (shares * fee_rate * price * (ONE - price)).quantize(FEE_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -302,6 +360,22 @@ def _reference_price(
     if index < 0 or target - times[index] > tolerance:
         return None
     return prices[index]
+
+
+def _prior_window_prices(
+    times: list[datetime],
+    prices: list[Decimal],
+    target: datetime,
+    tolerance: timedelta,
+) -> list[Decimal] | None:
+    current_index = len(times) - 1
+    if current_index < 2:
+        return None
+    anchor_index = bisect_right(times, target, hi=current_index) - 1
+    if anchor_index < 0 or target - times[anchor_index] > tolerance:
+        return None
+    prior = prices[anchor_index:current_index]
+    return prior if len(prior) >= 2 else None
 
 
 def _open_position(

@@ -2,7 +2,9 @@
 
 import "@testing-library/jest-dom/vitest";
 import {
+  defaultMeanReversionBacktestConfig,
   defaultMomentumBacktestConfig,
+  type BacktestConfig,
   type BacktestRun,
   type BacktestRunEnvelope,
 } from "@polytrade/contracts";
@@ -15,7 +17,11 @@ import type { BacktestClient } from "./backtest";
 const RUN_A = "00000000-0000-4000-8000-00000000000a";
 const RUN_B = "00000000-0000-4000-8000-00000000000b";
 
-function run(runId: string, question: string): BacktestRun {
+function run(
+  runId: string,
+  question: string,
+  config: BacktestConfig = defaultMomentumBacktestConfig,
+): BacktestRun {
   return {
     runId,
     marketId: `condition-${question}`,
@@ -23,16 +29,21 @@ function run(runId: string, question: string): BacktestRun {
     status: "completed",
     phase: "completed",
     progress: 100,
-    config: defaultMomentumBacktestConfig,
+    config,
     cancelRequested: false,
     warnings: [],
     createdAt: "2026-08-04T00:00:00.000Z",
   };
 }
 
-function envelope(runId: string, question: string, finalEquity: string): BacktestRunEnvelope {
+function envelope(
+  runId: string,
+  question: string,
+  finalEquity: string,
+  config: BacktestConfig = defaultMomentumBacktestConfig,
+): BacktestRunEnvelope {
   return {
-    run: run(runId, question),
+    run: run(runId, question, config),
     result: {
       metrics: {
         initialCapital: "10000.000000",
@@ -174,6 +185,47 @@ describe("BacktestsWorkspace run selection", () => {
 
     expect(screen.queryByText("Loading the replay chart")).not.toBeInTheDocument();
     expect(screen.getByText("2 trades")).toBeInTheDocument();
+  });
+
+  it("renders and reruns the exact strategy-specific configuration", async () => {
+    vi.useFakeTimers();
+    const meanRun = run(
+      RUN_A,
+      "Mean reversion run",
+      defaultMeanReversionBacktestConfig,
+    );
+    const client = {
+      list: vi.fn(async () => [meanRun]),
+      get: vi.fn(async () => envelope(
+        RUN_A,
+        "Mean reversion run",
+        "10100.000000",
+        defaultMeanReversionBacktestConfig,
+      )),
+      series: vi.fn(async () => ({ runId: RUN_A, points: [] })),
+      trades: vi.fn(async () => ({ runId: RUN_A, items: [], total: 0, offset: 0, limit: 50 })),
+      create: vi.fn(async () => ({ run: meanRun, result: null })),
+    } as unknown as BacktestClient;
+
+    render(
+      <BacktestsWorkspace
+        client={client}
+        focusedRunId={RUN_A}
+        onAskAgent={vi.fn()}
+        onError={vi.fn()}
+        onNotice={vi.fn()}
+      />,
+    );
+    await act(async () => flushPromises());
+
+    expect(screen.getAllByText("Mean reversion").length).toBeGreaterThan(0);
+    expect(screen.getByText("0.05 / 60m")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rerun" }));
+    await act(async () => flushPromises());
+    expect(client.create).toHaveBeenCalledWith(
+      meanRun.marketId,
+      defaultMeanReversionBacktestConfig,
+    );
   });
 });
 

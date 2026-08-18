@@ -197,35 +197,73 @@ async def start_polymarket_backtest(
         ),
     ],
     runtime: ToolRuntime[AgentRunContext],
+    strategy: Literal["momentum_v1", "mean_reversion_v1", "breakout_v1"] = "momentum_v1",
     initial_capital: str = "10000",
     position_size_pct: str = "0.10",
-    momentum_window_minutes: int = 60,
-    momentum_threshold: str = "0.05",
+    momentum_window_minutes: int | None = None,
+    momentum_threshold: str | None = None,
+    reversion_window_minutes: int | None = None,
+    reversion_threshold: str | None = None,
+    breakout_window_minutes: int | None = None,
+    breakout_threshold: str | None = None,
     take_profit: str = "0.10",
     stop_loss: str = "0.05",
     max_hold_minutes: int = 1_440,
     cooldown_minutes: int = 60,
     slippage: str = "0.01",
+    max_fill_delay_minutes: int = 5,
     start_at: str | None = None,
     end_at: str | None = None,
 ) -> str:
-    """Queue momentum_v1 for one exact resolved binary CLOB V2 market.
+    """Queue one selected deterministic strategy for an exact resolved binary market.
 
     Search resolved markets first. If multiple candidates match, show them to
-    the user and ask which one to use; never guess a condition ID.
+    the user and ask which one to use; never guess a condition ID. Momentum buys
+    strength, mean reversion buys a discount to the trailing mean, and breakout
+    buys a move above the prior rolling high. Omitted strategy settings use the
+    documented defaults for the selected strategy.
     """
+    supplied_strategy_fields = {
+        "momentum_v1": {
+            "momentumWindowMinutes": momentum_window_minutes,
+            "momentumThreshold": momentum_threshold,
+        },
+        "mean_reversion_v1": {
+            "reversionWindowMinutes": reversion_window_minutes,
+            "reversionThreshold": reversion_threshold,
+        },
+        "breakout_v1": {
+            "breakoutWindowMinutes": breakout_window_minutes,
+            "breakoutThreshold": breakout_threshold,
+        },
+    }
+    for candidate, fields in supplied_strategy_fields.items():
+        if candidate != strategy and any(value is not None for value in fields.values()):
+            raise ValueError(f"{candidate} parameters cannot be used with {strategy}")
+
+    strategy_defaults: dict[str, dict[str, int | str]] = {
+        "momentum_v1": {"momentumWindowMinutes": 60, "momentumThreshold": "0.05"},
+        "mean_reversion_v1": {
+            "reversionWindowMinutes": 60,
+            "reversionThreshold": "0.05",
+        },
+        "breakout_v1": {"breakoutWindowMinutes": 240, "breakoutThreshold": "0.02"},
+    }
+    strategy_fields = {
+        key: value if value is not None else strategy_defaults[strategy][key]
+        for key, value in supplied_strategy_fields[strategy].items()
+    }
     config = {
-        "strategy": "momentum_v1",
+        "strategy": strategy,
         "initialCapital": initial_capital,
         "positionSizePct": position_size_pct,
-        "momentumWindowMinutes": momentum_window_minutes,
-        "momentumThreshold": momentum_threshold,
+        **strategy_fields,
         "takeProfit": take_profit,
         "stopLoss": stop_loss,
         "maxHoldMinutes": max_hold_minutes,
         "cooldownMinutes": cooldown_minutes,
         "slippage": slippage,
-        "maxFillDelayMinutes": 5,
+        "maxFillDelayMinutes": max_fill_delay_minutes,
         **({"startAt": start_at} if start_at else {}),
         **({"endAt": end_at} if end_at else {}),
     }
@@ -247,6 +285,11 @@ async def start_polymarket_backtest(
             "runId": run.get("runId"),
             "marketId": run.get("marketId"),
             "marketQuestion": run.get("marketQuestion"),
+            "strategy": (
+                run.get("config", {}).get("strategy", strategy)
+                if isinstance(run.get("config"), dict)
+                else strategy
+            ),
             "status": run.get("status"),
             "phase": run.get("phase"),
             "progress": run.get("progress"),

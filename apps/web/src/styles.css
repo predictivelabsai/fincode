@@ -2907,36 +2907,80 @@ th small {
   color: var(--accent);
 }
 
-.strategy-lock {
+.strategy-selector {
   margin-bottom: 14px;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  border: 0;
+}
+
+.strategy-selector > label {
+  position: relative;
+  min-width: 0;
   padding: 10px;
   display: flex;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid #3b6852;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border-soft);
   border-radius: 6px;
+  color: var(--muted);
+  background: var(--canvas);
+  cursor: pointer;
+}
+
+.strategy-selector > label:hover,
+.strategy-selector .strategy-option-selected {
+  border-color: #3b6852;
+  color: var(--text);
   background: var(--accent-wash);
 }
 
-.strategy-lock > svg {
-  width: 17px;
-  color: var(--accent);
+.strategy-selector input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.strategy-lock > span {
+.strategy-selector > label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.strategy-option-copy {
   min-width: 0;
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 4px;
 }
 
-.strategy-lock strong {
-  font: 500 0.7rem var(--mono);
+.strategy-option-copy > span:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.strategy-lock small {
+.strategy-option-copy strong {
+  font-size: 0.7rem;
+}
+
+.strategy-option-copy > span:first-child code {
+  color: var(--accent);
+  font-size: 0.54rem;
+}
+
+.strategy-option-copy > small {
   color: var(--muted);
-  font-size: 0.58rem;
+  font-size: 0.6rem;
+  line-height: 1.4;
 }
 
 .validation-summary {

@@ -62,8 +62,8 @@ SSE event. The bearer token is never graph state or checkpoint data.
 5. The worker validates one resolved binary CLOB V2 market, fee rate, date
    range, and both one-minute histories. It stores an immutable, canonical,
    gzip-compressed dataset keyed by SHA-256.
-6. The Decimal engine replays `momentum_v1`, then one transaction stores trades,
-   metrics, downsampleable chart series, and the completed run.
+6. The Decimal engine dispatches the selected versioned strategy, then one transaction stores
+   trades, metrics, downsampleable chart series, and the completed run.
 
 The API polls PostgreSQL for display state. Redis result data is optional and
 short-lived. The outbox loop reconciles undispatched and stale queued/running
@@ -73,12 +73,22 @@ heartbeats, and soft/hard limits with a longer visibility timeout.
 
 ## Deterministic model
 
-`momentum_v1` watches YES and NO independently and selects the outcome whose
-price rises at least 0.05 over 60 minutes. Signals fill at that outcome's next
-observation and expire after five minutes. Entries and early exits use taker
-fills with configurable adverse slippage. Fees use
-`shares × feeRate × price × (1 − price)`, rounded to five decimals. Shares are
-rounded down to six decimals and sizing includes entry fees.
+The backtest config is a discriminated union keyed by a versioned strategy ID. An omitted config,
+an empty config, or an untagged config keeps the original `momentum_v1` defaults.
+
+| Strategy | Default entry rule |
+| --- | --- |
+| `momentum_v1` | Buy the outcome whose price rises at least 0.05 over 60 minutes. |
+| `mean_reversion_v1` | Buy the outcome at least 0.05 below the arithmetic mean of its prior 60-minute window. |
+| `breakout_v1` | Buy the outcome at least 0.02 above the maximum in its prior 240-minute window. |
+
+Mean-reversion and breakout windows exclude the current observation, require at least two prior
+observations, and require a window-start anchor within the configured fill-delay tolerance. Every
+strategy watches YES and NO independently, chooses the larger qualifying signal, and uses YES as
+the deterministic tie-breaker. Signals fill at that outcome's next observation and expire after
+the configured delay. Entries and early exits use taker fills with configurable adverse slippage.
+Fees use `shares × feeRate × price × (1 − price)`, rounded to five decimals. Shares are rounded down
+to six decimals and sizing includes entry fees.
 
 The default position is 10% of current cash/equity, with one open position,
 $0.10 take-profit, $0.05 stop-loss, a 24-hour maximum hold, and a 60-minute

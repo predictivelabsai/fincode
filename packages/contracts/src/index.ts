@@ -434,44 +434,120 @@ export const backtestPhaseSchema = z.enum([
 ]);
 export const backtestOutcomeSchema = z.enum(["YES", "NO"]);
 
+const commonBacktestConfigShape = {
+  initialCapital: backtestDecimalString.default("10000"),
+  positionSizePct: backtestDecimalString.default("0.10"),
+  takeProfit: backtestDecimalString.default("0.10"),
+  stopLoss: backtestDecimalString.default("0.05"),
+  maxHoldMinutes: z.number().int().min(1).max(43_200).default(1_440),
+  cooldownMinutes: z.number().int().min(0).max(43_200).default(60),
+  slippage: backtestDecimalString.default("0.01"),
+  maxFillDelayMinutes: z.number().int().min(1).max(60).default(5),
+  startAt: z.string().datetime().nullable().optional(),
+  endAt: z.string().datetime().nullable().optional(),
+};
+
+type CommonBacktestConfig = {
+  initialCapital: string;
+  positionSizePct: string;
+  takeProfit: string;
+  stopLoss: string;
+  slippage: string;
+  startAt?: string | null;
+  endAt?: string | null;
+};
+
+function validateCommonBacktestConfig(
+  value: CommonBacktestConfig,
+  ctx: z.RefinementCtx,
+): void {
+  if (Number(value.initialCapital) <= 0) {
+    ctx.addIssue({ code: "custom", path: ["initialCapital"], message: "Must be greater than zero" });
+  }
+  if (Number(value.positionSizePct) <= 0 || Number(value.positionSizePct) > 1) {
+    ctx.addIssue({ code: "custom", path: ["positionSizePct"], message: "Must be greater than zero and at most one" });
+  }
+  for (const key of ["takeProfit", "stopLoss", "slippage"] as const) {
+    if (Number(value[key]) > 1) {
+      ctx.addIssue({ code: "custom", path: [key], message: "Must be at most one" });
+    }
+  }
+  if (value.startAt && value.endAt && Date.parse(value.startAt) >= Date.parse(value.endAt)) {
+    ctx.addIssue({ code: "custom", path: ["endAt"], message: "Must be later than startAt" });
+  }
+}
+
 export const momentumBacktestConfigSchema = z
   .object({
     strategy: z.literal("momentum_v1").default("momentum_v1"),
-    initialCapital: backtestDecimalString.default("10000"),
-    positionSizePct: backtestDecimalString.default("0.10"),
+    ...commonBacktestConfigShape,
     momentumWindowMinutes: z.number().int().min(1).max(1_440).default(60),
     momentumThreshold: backtestDecimalString.default("0.05"),
-    takeProfit: backtestDecimalString.default("0.10"),
-    stopLoss: backtestDecimalString.default("0.05"),
-    maxHoldMinutes: z.number().int().min(1).max(43_200).default(1_440),
-    cooldownMinutes: z.number().int().min(0).max(43_200).default(60),
-    slippage: backtestDecimalString.default("0.01"),
-    maxFillDelayMinutes: z.number().int().min(1).max(60).default(5),
-    startAt: z.string().datetime().nullable().optional(),
-    endAt: z.string().datetime().nullable().optional(),
   })
+  .strict()
   .superRefine((value, ctx) => {
-    if (Number(value.initialCapital) <= 0) {
-      ctx.addIssue({ code: "custom", path: ["initialCapital"], message: "Must be greater than zero" });
-    }
-    if (Number(value.positionSizePct) <= 0 || Number(value.positionSizePct) > 1) {
-      ctx.addIssue({ code: "custom", path: ["positionSizePct"], message: "Must be greater than zero and at most one" });
-    }
-    for (const key of ["momentumThreshold", "takeProfit", "stopLoss", "slippage"] as const) {
-      if (Number(value[key]) > 1) {
-        ctx.addIssue({ code: "custom", path: [key], message: "Must be at most one" });
-      }
-    }
-    if (value.startAt && value.endAt && Date.parse(value.startAt) >= Date.parse(value.endAt)) {
-      ctx.addIssue({ code: "custom", path: ["endAt"], message: "Must be later than startAt" });
+    validateCommonBacktestConfig(value, ctx);
+    if (Number(value.momentumThreshold) > 1) {
+      ctx.addIssue({ code: "custom", path: ["momentumThreshold"], message: "Must be at most one" });
     }
   });
 
-export const defaultMomentumBacktestConfig = momentumBacktestConfigSchema.parse({});
+export const meanReversionBacktestConfigSchema = z
+  .object({
+    strategy: z.literal("mean_reversion_v1").default("mean_reversion_v1"),
+    ...commonBacktestConfigShape,
+    reversionWindowMinutes: z.number().int().min(1).max(1_440).default(60),
+    reversionThreshold: backtestDecimalString.default("0.05"),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    validateCommonBacktestConfig(value, ctx);
+    if (Number(value.reversionThreshold) <= 0 || Number(value.reversionThreshold) > 1) {
+      ctx.addIssue({ code: "custom", path: ["reversionThreshold"], message: "Must be greater than zero and at most one" });
+    }
+  });
+
+export const breakoutBacktestConfigSchema = z
+  .object({
+    strategy: z.literal("breakout_v1").default("breakout_v1"),
+    ...commonBacktestConfigShape,
+    breakoutWindowMinutes: z.number().int().min(1).max(1_440).default(240),
+    breakoutThreshold: backtestDecimalString.default("0.02"),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    validateCommonBacktestConfig(value, ctx);
+    if (Number(value.breakoutThreshold) <= 0 || Number(value.breakoutThreshold) > 1) {
+      ctx.addIssue({ code: "custom", path: ["breakoutThreshold"], message: "Must be greater than zero and at most one" });
+    }
+  });
+
+const taggedBacktestConfigSchema = z.discriminatedUnion("strategy", [
+  momentumBacktestConfigSchema,
+  meanReversionBacktestConfigSchema,
+  breakoutBacktestConfigSchema,
+]);
+
+export const backtestConfigSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !Array.isArray(value) && !("strategy" in value)) {
+    return { strategy: "momentum_v1", ...value };
+  }
+  return value;
+}, taggedBacktestConfigSchema);
+
+export const defaultMomentumBacktestConfig = momentumBacktestConfigSchema.parse({
+  strategy: "momentum_v1",
+});
+export const defaultMeanReversionBacktestConfig = meanReversionBacktestConfigSchema.parse({
+  strategy: "mean_reversion_v1",
+});
+export const defaultBreakoutBacktestConfig = breakoutBacktestConfigSchema.parse({
+  strategy: "breakout_v1",
+});
 
 export const createBacktestRequestSchema = z.object({
   marketId: z.string().min(1).max(200),
-  config: momentumBacktestConfigSchema.default(defaultMomentumBacktestConfig),
+  config: backtestConfigSchema.default(defaultMomentumBacktestConfig),
 });
 
 export const backtestFailureSchema = z.object({ code: z.string(), message: z.string() });
@@ -483,7 +559,7 @@ export const backtestRunSchema = z.object({
   status: backtestStatusSchema,
   phase: backtestPhaseSchema,
   progress: z.number().int().min(0).max(100),
-  config: momentumBacktestConfigSchema,
+  config: backtestConfigSchema,
   resolvedOutcome: backtestOutcomeSchema.nullable().optional(),
   datasetHash: z.string().length(64).nullable().optional(),
   cancelRequested: z.boolean().default(false),
@@ -589,6 +665,10 @@ export type CreateIntentRequest = z.infer<typeof createIntentRequestSchema>;
 export type OrderIntentResponse = z.infer<typeof orderIntentResponseSchema>;
 export type TypedData = z.infer<typeof typedDataSchema>;
 export type MomentumBacktestConfig = z.infer<typeof momentumBacktestConfigSchema>;
+export type MeanReversionBacktestConfig = z.infer<typeof meanReversionBacktestConfigSchema>;
+export type BreakoutBacktestConfig = z.infer<typeof breakoutBacktestConfigSchema>;
+export type BacktestConfig = z.infer<typeof backtestConfigSchema>;
+export type BacktestStrategy = BacktestConfig["strategy"];
 export type CreateBacktestRequest = z.infer<typeof createBacktestRequestSchema>;
 export type BacktestStatus = z.infer<typeof backtestStatusSchema>;
 export type BacktestPhase = z.infer<typeof backtestPhaseSchema>;

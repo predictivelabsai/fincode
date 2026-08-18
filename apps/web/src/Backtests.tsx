@@ -232,9 +232,9 @@ export function BacktestsWorkspace(props: {
     <main className="backtest-workspace" id="backtests">
       <header className="backtest-hero">
         <div>
-          <span className="eyebrow">Hypothetical replay · momentum_v1</span>
-          <h1>Replay one market. Audit every fill.</h1>
-          <p>One-minute Polymarket history, explicit execution assumptions, and no wallet access.</p>
+          <span className="eyebrow">Historical market analysis</span>
+          <h1>Backtest</h1>
+          <p>Evaluate strategy performance against one-minute Polymarket history with transparent execution assumptions and no wallet access.</p>
         </div>
         <div className="backtest-hero-actions">
           <button className="button button-quiet" type="button" onClick={() => void refresh()}>
@@ -261,7 +261,7 @@ export function BacktestsWorkspace(props: {
             <div className="run-empty">
               <LineChart aria-hidden="true" />
               <strong>No backtests yet</strong>
-              <p>Ask the agent to find a resolved market and run momentum_v1.</p>
+              <p>Choose a resolved market and test momentum, mean reversion, or breakout.</p>
               <button type="button" onClick={props.onAskAgent}>Open research chat</button>
             </div>
           ) : (
@@ -272,7 +272,7 @@ export function BacktestsWorkspace(props: {
                     <span className={`run-state run-state-${run.status}`} />
                     <span>
                       <strong>{run.marketQuestion || compactId(run.marketId)}</strong>
-                      <small>{phaseLabel(run.phase)} · {formatShortDate(run.createdAt)}</small>
+                      <small>{strategyLabel(run.config.strategy)} · {phaseLabel(run.phase)} · {formatShortDate(run.createdAt)}</small>
                     </span>
                   </button>
                   <label title={run.status === "completed" ? "Add to comparison" : "Only completed runs can be compared"}>
@@ -347,6 +347,7 @@ function RunHeader(props: {
         <h2>{run.marketQuestion || "Resolving market metadata…"}</h2>
         <div className="run-meta">
           <StatusBadge run={run} />
+          <span>{strategyLabel(run.config.strategy)}</span>
           <span>Created {formatDateTime(run.createdAt)}</span>
           {run.resolvedOutcome && <span>Resolved {run.resolvedOutcome}</span>}
         </div>
@@ -518,7 +519,7 @@ function TradeLedger({ trades, page, total, onPage }: {
   return (
     <section className="trade-ledger">
       <div className="ledger-heading"><div><span className="eyebrow">Execution ledger</span><h3>Every modeled fill</h3></div><span>{total} trades</span></div>
-      {trades.length === 0 ? <p className="ledger-empty">No qualifying momentum signal was filled.</p> : (
+      {trades.length === 0 ? <p className="ledger-empty">No qualifying strategy signal was filled.</p> : (
         <div className="table-scroll"><table><thead><tr><th>#</th><th>Outcome</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Reason</th><th>P&amp;L</th></tr></thead><tbody>
           {trades.map((trade) => <tr key={trade.tradeIndex}><td>{trade.tradeIndex + 1}</td><td><span className={`outcome-chip outcome-${trade.outcome.toLowerCase()}`}>{trade.outcome}</span></td><td>{trade.entryPrice}<small>{formatShortDate(trade.entryAt)}</small></td><td>{trade.exitPrice}<small>{formatShortDate(trade.exitAt)}</small></td><td>{Number(trade.shares).toFixed(2)}</td><td>{reasonLabel(trade.exitReason)}</td><td className={Number(trade.pnl) >= 0 ? "value-positive" : "value-negative"}>{money(trade.pnl)}</td></tr>)}
         </tbody></table></div>
@@ -536,10 +537,16 @@ function TradeLedger({ trades, page, total, onPage }: {
 
 function ConfigurationStrip({ run }: { run: BacktestRun }) {
   const config = run.config;
-  const items = [
+  const strategyItems: Array<[string, string]> = config.strategy === "momentum_v1"
+    ? [["Momentum signal", `${config.momentumThreshold} / ${config.momentumWindowMinutes}m`]]
+    : config.strategy === "mean_reversion_v1"
+      ? [["Mean discount", `${config.reversionThreshold} / ${config.reversionWindowMinutes}m`]]
+      : [["Breakout buffer", `${config.breakoutThreshold} / ${config.breakoutWindowMinutes}m`]];
+  const items: Array<[string, string]> = [
+    ["Strategy", strategyLabel(config.strategy)],
     ["Starting capital", money(config.initialCapital)],
     ["Position size", percent(String(Number(config.positionSizePct) * 100))],
-    ["Momentum", `${config.momentumThreshold} / ${config.momentumWindowMinutes}m`],
+    ...strategyItems,
     ["Take profit", config.takeProfit],
     ["Stop loss", config.stopLoss],
     ["Max hold", `${config.maxHoldMinutes}m`],
@@ -553,8 +560,8 @@ function ComparisonPanel({ envelopes, onClose }: { envelopes: BacktestRunEnvelop
   return (
     <section className="comparison-panel" aria-labelledby="comparison-heading">
       <header><div><span className="eyebrow">Side-by-side audit</span><h2 id="comparison-heading">Run comparison</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close comparison"><X /></button></header>
-      <div className="table-scroll"><table><thead><tr><th>Market</th><th>Return</th><th>Drawdown</th><th>Trades</th><th>Win rate</th><th>Fees</th><th>Capital</th></tr></thead><tbody>
-        {envelopes.map(({ run, result }) => <tr key={run.runId}><th>{run.marketQuestion || compactId(run.marketId)}<small>{compactId(run.runId)}</small></th><td className={Number(result?.metrics.returnPct || 0) >= 0 ? "value-positive" : "value-negative"}>{result ? percent(result.metrics.returnPct) : "—"}</td><td>{result ? percent(result.metrics.maxDrawdownPct) : "—"}</td><td>{result?.metrics.tradeCount ?? "—"}</td><td>{result ? percent(result.metrics.winRatePct) : "—"}</td><td>{result ? money(result.metrics.fees) : "—"}</td><td>{money(run.config.initialCapital)}</td></tr>)}
+      <div className="table-scroll"><table><thead><tr><th>Market</th><th>Strategy</th><th>Return</th><th>Drawdown</th><th>Trades</th><th>Win rate</th><th>Fees</th><th>Capital</th></tr></thead><tbody>
+        {envelopes.map(({ run, result }) => <tr key={run.runId}><th>{run.marketQuestion || compactId(run.marketId)}<small>{compactId(run.runId)}</small></th><td>{strategyLabel(run.config.strategy)}</td><td className={Number(result?.metrics.returnPct || 0) >= 0 ? "value-positive" : "value-negative"}>{result ? percent(result.metrics.returnPct) : "—"}</td><td>{result ? percent(result.metrics.maxDrawdownPct) : "—"}</td><td>{result?.metrics.tradeCount ?? "—"}</td><td>{result ? percent(result.metrics.winRatePct) : "—"}</td><td>{result ? money(result.metrics.fees) : "—"}</td><td>{money(run.config.initialCapital)}</td></tr>)}
       </tbody></table></div>
     </section>
   );
@@ -629,6 +636,14 @@ function chartGeometry(points: BacktestSeriesPoint[]) {
 
 function phaseLabel(value: BacktestRun["phase"]): string {
   return ({ queued: "Queued", fetching: "Fetching history", simulating: "Simulating", saving: "Saving", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[value];
+}
+
+function strategyLabel(value: BacktestRun["config"]["strategy"]): string {
+  return ({
+    momentum_v1: "Momentum",
+    mean_reversion_v1: "Mean reversion",
+    breakout_v1: "Breakout",
+  })[value];
 }
 
 function progressCopy(value: BacktestRun["phase"]): string {

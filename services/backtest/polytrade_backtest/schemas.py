@@ -1,9 +1,18 @@
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    model_validator,
+)
 
 
 def to_camel(value: str) -> str:
@@ -36,12 +45,9 @@ BacktestPhase = Literal[
 Outcome = Literal["YES", "NO"]
 
 
-class MomentumBacktestConfig(ContractModel):
-    strategy: Literal["momentum_v1"] = "momentum_v1"
+class BaseBacktestConfig(ContractModel):
     initial_capital: NonNegativeDecimalString = "10000"
     position_size_pct: NonNegativeDecimalString = "0.10"
-    momentum_window_minutes: int = Field(default=60, ge=1, le=1_440)
-    momentum_threshold: NonNegativeDecimalString = "0.05"
     take_profit: NonNegativeDecimalString = "0.10"
     stop_loss: NonNegativeDecimalString = "0.05"
     max_hold_minutes: int = Field(default=1_440, ge=1, le=43_200)
@@ -52,12 +58,12 @@ class MomentumBacktestConfig(ContractModel):
     end_at: datetime | None = None
 
     @model_validator(mode="after")
-    def validate_values(self) -> "MomentumBacktestConfig":
+    def validate_values(self) -> "BaseBacktestConfig":
         if Decimal(self.initial_capital) <= 0:
             raise ValueError("initialCapital must be greater than zero")
         if not Decimal("0") < Decimal(self.position_size_pct) <= Decimal("1"):
             raise ValueError("positionSizePct must be greater than zero and at most one")
-        for name in ("momentum_threshold", "take_profit", "stop_loss", "slippage"):
+        for name in ("take_profit", "stop_loss", "slippage"):
             if Decimal(getattr(self, name)) > Decimal("1"):
                 raise ValueError(f"{to_camel(name)} must be at most one")
         for name in ("start_at", "end_at"):
@@ -69,9 +75,78 @@ class MomentumBacktestConfig(ContractModel):
         return self
 
 
+class MomentumBacktestConfig(BaseBacktestConfig):
+    strategy: Literal["momentum_v1"] = "momentum_v1"
+    momentum_window_minutes: int = Field(default=60, ge=1, le=1_440)
+    momentum_threshold: NonNegativeDecimalString = "0.05"
+
+    @model_validator(mode="after")
+    def validate_momentum(self) -> "MomentumBacktestConfig":
+        if Decimal(self.momentum_threshold) > Decimal("1"):
+            raise ValueError("momentumThreshold must be at most one")
+        return self
+
+
+class MeanReversionBacktestConfig(BaseBacktestConfig):
+    strategy: Literal["mean_reversion_v1"] = "mean_reversion_v1"
+    reversion_window_minutes: int = Field(default=60, ge=1, le=1_440)
+    reversion_threshold: NonNegativeDecimalString = "0.05"
+
+    @model_validator(mode="after")
+    def validate_reversion(self) -> "MeanReversionBacktestConfig":
+        threshold = Decimal(self.reversion_threshold)
+        if threshold <= 0 or threshold > Decimal("1"):
+            raise ValueError("reversionThreshold must be greater than zero and at most one")
+        return self
+
+
+class BreakoutBacktestConfig(BaseBacktestConfig):
+    strategy: Literal["breakout_v1"] = "breakout_v1"
+    breakout_window_minutes: int = Field(default=240, ge=1, le=1_440)
+    breakout_threshold: NonNegativeDecimalString = "0.02"
+
+    @model_validator(mode="after")
+    def validate_breakout(self) -> "BreakoutBacktestConfig":
+        threshold = Decimal(self.breakout_threshold)
+        if threshold <= 0 or threshold > Decimal("1"):
+            raise ValueError("breakoutThreshold must be greater than zero and at most one")
+        return self
+
+
+type TaggedBacktestConfig = Annotated[
+    MomentumBacktestConfig | MeanReversionBacktestConfig | BreakoutBacktestConfig,
+    Field(discriminator="strategy"),
+]
+
+
+def _default_backtest_strategy(value: object) -> object:
+    if isinstance(value, Mapping) and "strategy" not in value:
+        return {"strategy": "momentum_v1", **value}
+    return value
+
+
+type BacktestConfig = Annotated[
+    TaggedBacktestConfig,
+    BeforeValidator(_default_backtest_strategy),
+]
+BACKTEST_CONFIG_ADAPTER = TypeAdapter(BacktestConfig)
+
+
+def parse_backtest_config(value: object) -> BacktestConfig:
+    return BACKTEST_CONFIG_ADAPTER.validate_python(value)
+
+
+def strategy_lookback_minutes(config: BacktestConfig) -> int:
+    if config.strategy == "momentum_v1":
+        return config.momentum_window_minutes
+    if config.strategy == "mean_reversion_v1":
+        return config.reversion_window_minutes
+    return config.breakout_window_minutes
+
+
 class CreateBacktestRequest(ContractModel):
     market_id: str = Field(min_length=1, max_length=200)
-    config: MomentumBacktestConfig = Field(default_factory=MomentumBacktestConfig)
+    config: BacktestConfig = Field(default_factory=MomentumBacktestConfig)
 
 
 class BacktestFailure(ContractModel):
@@ -86,7 +161,7 @@ class BacktestRun(ContractModel):
     status: BacktestStatus
     phase: BacktestPhase
     progress: int = Field(ge=0, le=100)
-    config: MomentumBacktestConfig
+    config: BacktestConfig
     resolved_outcome: Outcome | None = None
     dataset_hash: str | None = None
     cancel_requested: bool = False

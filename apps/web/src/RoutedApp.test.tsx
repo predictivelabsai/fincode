@@ -448,7 +448,7 @@ describe("routed workspace", () => {
     mocks.getAgentThreadItems.mockResolvedValue([
       { kind: "message", id: "message", role: "assistant", text: "Draft ready" },
       { kind: "proposal", id: "proposal", proposal, expiresAt: "2099-08-04T00:02:00.000Z" },
-      { kind: "backtest", id: "backtest", backtest: { kind: "backtest_run", ...run } },
+      { kind: "backtest", id: "backtest", backtest: { kind: "backtest_run", ...run, strategy: run.config.strategy } },
     ]);
     renderRoute(`/chat/${THREAD_A}`);
 
@@ -601,7 +601,7 @@ describe("routed workspace", () => {
     expect(mocks.attachWallet).not.toHaveBeenCalled();
   });
 
-  it("searches only resolved markets, validates momentum_v1, and launches directly", async () => {
+  it("retains strategy drafts and launches the selected breakout configuration", async () => {
     const user = userEvent.setup();
     mocks.searchMarkets.mockResolvedValue({
       query: "election",
@@ -667,6 +667,20 @@ describe("routed workspace", () => {
     mocks.backtestCreate.mockResolvedValue({ run: { ...run, status: "queued", phase: "queued", progress: 0 }, result: null });
     renderRoute("/backtests/new");
 
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    await user.click(screen.getByRole("radio", { name: /Breakout/i }));
+    await user.clear(screen.getByRole("textbox", { name: "Prior-high window (min)" }));
+    await user.type(screen.getByRole("textbox", { name: "Prior-high window (min)" }), "180");
+    await user.clear(screen.getByRole("textbox", { name: "Breakout buffer" }));
+    await user.type(screen.getByRole("textbox", { name: "Breakout buffer" }), "0.03");
+    await user.clear(screen.getByRole("textbox", { name: "Starting capital" }));
+    await user.type(screen.getByRole("textbox", { name: "Starting capital" }), "12000");
+    await user.click(screen.getByRole("radio", { name: /Mean reversion/i }));
+    expect(screen.getByRole("textbox", { name: "Starting capital" })).toHaveValue("12000");
+    await user.click(screen.getByRole("radio", { name: /Breakout/i }));
+    expect(screen.getByRole("textbox", { name: "Prior-high window (min)" })).toHaveValue("180");
+    expect(screen.getByRole("textbox", { name: "Breakout buffer" })).toHaveValue("0.03");
+
     await user.type(screen.getByRole("textbox", { name: "Search resolved markets" }), "election");
     await user.click(screen.getByRole("button", { name: "Search" }));
     await user.click(await screen.findByRole("button", { name: /Was the result yes/i }));
@@ -674,7 +688,19 @@ describe("routed workspace", () => {
     await user.click(screen.getByRole("button", { name: /Launch backtest/i }));
 
     await waitFor(() => expect(mocks.searchMarkets).toHaveBeenCalledWith("election", "resolved", 20));
-    expect(mocks.backtestCreate).toHaveBeenCalledWith("condition-1", expect.objectContaining({ strategy: "momentum_v1" }));
+    expect(mocks.backtestCreate).toHaveBeenCalledWith("condition-1", {
+      strategy: "breakout_v1",
+      initialCapital: "12000",
+      positionSizePct: "0.10",
+      breakoutWindowMinutes: 180,
+      breakoutThreshold: "0.03",
+      takeProfit: "0.10",
+      stopLoss: "0.05",
+      maxHoldMinutes: 1440,
+      cooldownMinutes: 60,
+      slippage: "0.01",
+      maxFillDelayMinutes: 5,
+    });
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/backtests/${RUN_ID}`));
   });
 

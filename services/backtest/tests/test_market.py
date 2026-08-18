@@ -1,16 +1,19 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 import pytest
 import respx
 
 from polytrade_backtest.config import get_settings
+from polytrade_backtest.engine import PriceObservation
 from polytrade_backtest.market import (
     MarketDataError,
     PolymarketHistoryClient,
     decode_dataset,
+    validate_dataset_history,
 )
-from polytrade_backtest.schemas import MomentumBacktestConfig
+from polytrade_backtest.schemas import BreakoutBacktestConfig, MomentumBacktestConfig
 
 
 def market_payload(*, closed: bool = True, start_date: str = "2026-05-01T00:00:00Z", **overrides):
@@ -41,6 +44,20 @@ def history(price: str):
 
 def keyset_payload(*markets: dict) -> dict:
     return {"markets": list(markets)}
+
+
+def test_history_validation_uses_the_selected_strategy_lookback() -> None:
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    points = [
+        PriceObservation(start + timedelta(minutes=minute), Decimal("0.5"))
+        for minute in range(121)
+    ]
+    histories = {"YES": points, "NO": points}
+
+    validate_dataset_history(histories, MomentumBacktestConfig())
+    with pytest.raises(MarketDataError) as error:
+        validate_dataset_history(histories, BreakoutBacktestConfig())
+    assert error.value.code == "INSUFFICIENT_HISTORY"
 
 
 @pytest.mark.asyncio

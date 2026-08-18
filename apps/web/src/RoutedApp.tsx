@@ -46,14 +46,17 @@ import {
 } from "react-router-dom";
 import {
   createOrderProposalSchema,
+  backtestConfigSchema,
+  defaultBreakoutBacktestConfig,
+  defaultMeanReversionBacktestConfig,
   defaultMomentumBacktestConfig,
   isBacktestEligibleMarket,
-  momentumBacktestConfigSchema,
   tradingActionProposalSchema,
   type AccountOverview,
+  type BacktestConfig,
+  type BacktestStrategy,
   type CancellationSelector,
   type MarketSearchMarket,
-  type MomentumBacktestConfig,
   type OrderIntentResponse,
   type TradingActionProposal,
   type WalletSessionStatus,
@@ -153,9 +156,9 @@ interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 const STARTER_QUESTIONS = [
-  "Find active election markets with the most liquidity",
-  "What does the order book imply for the leading Fed market?",
-  "Backtest momentum_v1 on a resolved election market",
+  "Backtest mean reversion on a resolved election market",
+  "Find a liquid active market for a paper-trading setup",
+  "Research the leading Fed market and summarize its order book",
 ];
 
 const emptyChat = (): ChatState => ({
@@ -818,7 +821,7 @@ function ChatPage({ threadId }: { threadId?: string }) {
             <div className="chat-empty">
               <span className="empty-orbit" aria-hidden="true"><Zap /></span>
               <h2>Research a market or prepare an action.</h2>
-              <p>Ask about live Polymarket data, your account, or the single supported historical strategy. Orders remain drafts until reviewed and signed.</p>
+              <p>Ask about live Polymarket data, your account, or historical strategy backtests. Orders remain drafts until reviewed and signed.</p>
               <div className="starter-list" aria-label="Starter prompts">
                 {STARTER_QUESTIONS.map((starter) => (
                   <button key={starter} type="button" onClick={() => setQuestion(starter)}>
@@ -856,7 +859,7 @@ function ChatPage({ threadId }: { threadId?: string }) {
             id="chat-question"
             rows={2}
             maxLength={2_000}
-            placeholder={workspace.activeStreamThreadId ? "One response is already running…" : "Ask about a market, account, order, or momentum_v1 backtest…"}
+            placeholder={workspace.activeStreamThreadId ? "One response is already running…" : "Ask about a market, account, order, or strategy backtest…"}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={(event) => {
@@ -959,6 +962,7 @@ const ActivityPane = function ActivityPane(props: {
             runId: envelope.run.runId,
             marketId: envelope.run.marketId,
             marketQuestion: envelope.run.marketQuestion,
+            strategy: envelope.run.config.strategy,
             status: envelope.run.status,
             phase: envelope.run.phase,
             progress: envelope.run.progress,
@@ -1013,7 +1017,7 @@ const ActivityPane = function ActivityPane(props: {
           <div className="activity-item">
             <span className="tape-node" aria-hidden="true" />
             <section className="activity-card">
-              <div className="activity-card-heading"><span className={`status-dot status-${run.status}`} /><span>Backtest · {phaseLabel(run.phase)}</span><strong>{run.progress}%</strong></div>
+              <div className="activity-card-heading"><span className={`status-dot status-${run.status}`} /><span>{strategyName(run.strategy)} · {phaseLabel(run.phase)}</span><strong>{run.progress}%</strong></div>
               <h3>{run.marketQuestion || compactIdentifier(run.marketId)}</h3>
               <div className="progress-track"><span style={{ width: `${run.progress}%` }} /></div>
               <Link to={`/backtests/${run.runId}`}>Open run <ChevronRight /></Link>
@@ -1224,11 +1228,9 @@ function BacktestsPage() {
   );
 }
 
-interface BacktestFormState {
+interface CommonBacktestFormState {
   initialCapital: string;
   positionSizePct: string;
-  momentumWindowMinutes: string;
-  momentumThreshold: string;
   takeProfit: string;
   stopLoss: string;
   maxHoldMinutes: string;
@@ -1236,6 +1238,34 @@ interface BacktestFormState {
   slippage: string;
   maxFillDelayMinutes: string;
 }
+
+interface StrategyFormDrafts {
+  momentum_v1: { momentumWindowMinutes: string; momentumThreshold: string };
+  mean_reversion_v1: { reversionWindowMinutes: string; reversionThreshold: string };
+  breakout_v1: { breakoutWindowMinutes: string; breakoutThreshold: string };
+}
+
+const BACKTEST_STRATEGIES: Array<{
+  id: BacktestStrategy;
+  name: string;
+  description: string;
+}> = [
+  {
+    id: "momentum_v1",
+    name: "Momentum",
+    description: "Buy the outcome with the strongest configured price rise.",
+  },
+  {
+    id: "mean_reversion_v1",
+    name: "Mean reversion",
+    description: "Buy an outcome trading below its trailing average.",
+  },
+  {
+    id: "breakout_v1",
+    name: "Breakout",
+    description: "Buy an outcome clearing its prior rolling high.",
+  },
+];
 
 function NewBacktestPage() {
   const workspace = useWorkspace();
@@ -1245,20 +1275,33 @@ function NewBacktestPage() {
   const [selected, setSelected] = useState<MarketSearchMarket | null>(null);
   const [searching, setSearching] = useState(false);
   const [launching, setLaunching] = useState(false);
-  const defaults = defaultMomentumBacktestConfig;
-  const [form, setForm] = useState<BacktestFormState>({
-    initialCapital: defaults.initialCapital,
-    positionSizePct: defaults.positionSizePct,
-    momentumWindowMinutes: String(defaults.momentumWindowMinutes),
-    momentumThreshold: defaults.momentumThreshold,
-    takeProfit: defaults.takeProfit,
-    stopLoss: defaults.stopLoss,
-    maxHoldMinutes: String(defaults.maxHoldMinutes),
-    cooldownMinutes: String(defaults.cooldownMinutes),
-    slippage: defaults.slippage,
-    maxFillDelayMinutes: String(defaults.maxFillDelayMinutes),
+  const [strategy, setStrategy] = useState<BacktestStrategy>("momentum_v1");
+  const [common, setCommon] = useState<CommonBacktestFormState>({
+    initialCapital: defaultMomentumBacktestConfig.initialCapital,
+    positionSizePct: defaultMomentumBacktestConfig.positionSizePct,
+    takeProfit: defaultMomentumBacktestConfig.takeProfit,
+    stopLoss: defaultMomentumBacktestConfig.stopLoss,
+    maxHoldMinutes: String(defaultMomentumBacktestConfig.maxHoldMinutes),
+    cooldownMinutes: String(defaultMomentumBacktestConfig.cooldownMinutes),
+    slippage: defaultMomentumBacktestConfig.slippage,
+    maxFillDelayMinutes: String(defaultMomentumBacktestConfig.maxFillDelayMinutes),
   });
-  const parsed = momentumBacktestConfigSchema.safeParse(configFromForm(form));
+  const [drafts, setDrafts] = useState<StrategyFormDrafts>({
+    momentum_v1: {
+      momentumWindowMinutes: String(defaultMomentumBacktestConfig.momentumWindowMinutes),
+      momentumThreshold: defaultMomentumBacktestConfig.momentumThreshold,
+    },
+    mean_reversion_v1: {
+      reversionWindowMinutes: String(defaultMeanReversionBacktestConfig.reversionWindowMinutes),
+      reversionThreshold: defaultMeanReversionBacktestConfig.reversionThreshold,
+    },
+    breakout_v1: {
+      breakoutWindowMinutes: String(defaultBreakoutBacktestConfig.breakoutWindowMinutes),
+      breakoutThreshold: defaultBreakoutBacktestConfig.breakoutThreshold,
+    },
+  });
+  const parsed = backtestConfigSchema.safeParse(configFromForm(strategy, common, drafts));
+  const selectedStrategy = BACKTEST_STRATEGIES.find((item) => item.id === strategy)!;
 
   const search = async (event: FormEvent) => {
     event.preventDefault();
@@ -1291,7 +1334,7 @@ function NewBacktestPage() {
 
   return (
     <main className="detail-page new-backtest-page">
-      <PageTitle eyebrow="Strategies / New backtest" title="Launch momentum_v1" description="The supported strategy enters when recent price momentum crosses a threshold, then exits on take-profit, stop-loss, maximum hold, or settlement. Results are hypothetical.">
+      <PageTitle eyebrow="Strategies / New backtest" title="Launch a backtest" description={`${selectedStrategy.description} Every strategy uses next-observation fills and shared risk controls. Results are hypothetical.`}>
         <Link className="button button-quiet" to="/backtests">Back to runs</Link>
       </PageTitle>
       <div className="new-backtest-grid">
@@ -1315,19 +1358,40 @@ function NewBacktestPage() {
         </section>
 
         <section className="form-card">
-          <div className="form-section-heading"><span>02</span><div><h2>Exact configuration</h2><p>Only momentum_v1 is available.</p></div></div>
-          <div className="strategy-lock"><Zap /><span><strong>momentum_v1</strong><small>Single-market, next-observation execution model</small></span><StatusPill value="Selected" /></div>
+          <div className="form-section-heading"><span>02</span><div><h2>Strategy and configuration</h2><p>Choose the entry signal, then tune its replay parameters.</p></div></div>
+          <fieldset className="strategy-selector">
+            <legend className="sr-only">Backtest strategy</legend>
+            {BACKTEST_STRATEGIES.map((option) => (
+              <label className={strategy === option.id ? "strategy-option-selected" : ""} key={option.id}>
+                <input type="radio" name="backtest-strategy" value={option.id} checked={strategy === option.id} onChange={() => setStrategy(option.id)} />
+                <span className="strategy-option-copy">
+                  <span><strong>{option.name}</strong><code>{option.id}</code></span>
+                  <small>{option.description}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
           <div className="config-form-grid">
-            <ConfigField label="Starting capital" field="initialCapital" form={form} setForm={setForm} />
-            <ConfigField label="Position size (0–1)" field="positionSizePct" form={form} setForm={setForm} />
-            <ConfigField label="Momentum window (min)" field="momentumWindowMinutes" form={form} setForm={setForm} integer />
-            <ConfigField label="Momentum threshold" field="momentumThreshold" form={form} setForm={setForm} />
-            <ConfigField label="Take profit" field="takeProfit" form={form} setForm={setForm} />
-            <ConfigField label="Stop loss" field="stopLoss" form={form} setForm={setForm} />
-            <ConfigField label="Maximum hold (min)" field="maxHoldMinutes" form={form} setForm={setForm} integer />
-            <ConfigField label="Cooldown (min)" field="cooldownMinutes" form={form} setForm={setForm} integer />
-            <ConfigField label="Slippage / side" field="slippage" form={form} setForm={setForm} />
-            <ConfigField label="Maximum fill delay (min)" field="maxFillDelayMinutes" form={form} setForm={setForm} integer />
+            {strategy === "momentum_v1" && <>
+              <ConfigField label="Momentum window (min)" value={drafts.momentum_v1.momentumWindowMinutes} onChange={(value) => setDrafts((current) => ({ ...current, momentum_v1: { ...current.momentum_v1, momentumWindowMinutes: value } }))} integer />
+              <ConfigField label="Momentum threshold" value={drafts.momentum_v1.momentumThreshold} onChange={(value) => setDrafts((current) => ({ ...current, momentum_v1: { ...current.momentum_v1, momentumThreshold: value } }))} />
+            </>}
+            {strategy === "mean_reversion_v1" && <>
+              <ConfigField label="Trailing mean window (min)" value={drafts.mean_reversion_v1.reversionWindowMinutes} onChange={(value) => setDrafts((current) => ({ ...current, mean_reversion_v1: { ...current.mean_reversion_v1, reversionWindowMinutes: value } }))} integer />
+              <ConfigField label="Discount to mean" value={drafts.mean_reversion_v1.reversionThreshold} onChange={(value) => setDrafts((current) => ({ ...current, mean_reversion_v1: { ...current.mean_reversion_v1, reversionThreshold: value } }))} />
+            </>}
+            {strategy === "breakout_v1" && <>
+              <ConfigField label="Prior-high window (min)" value={drafts.breakout_v1.breakoutWindowMinutes} onChange={(value) => setDrafts((current) => ({ ...current, breakout_v1: { ...current.breakout_v1, breakoutWindowMinutes: value } }))} integer />
+              <ConfigField label="Breakout buffer" value={drafts.breakout_v1.breakoutThreshold} onChange={(value) => setDrafts((current) => ({ ...current, breakout_v1: { ...current.breakout_v1, breakoutThreshold: value } }))} />
+            </>}
+            <ConfigField label="Starting capital" value={common.initialCapital} onChange={(value) => setCommon((current) => ({ ...current, initialCapital: value }))} />
+            <ConfigField label="Position size (0–1)" value={common.positionSizePct} onChange={(value) => setCommon((current) => ({ ...current, positionSizePct: value }))} />
+            <ConfigField label="Take-profit move" value={common.takeProfit} onChange={(value) => setCommon((current) => ({ ...current, takeProfit: value }))} />
+            <ConfigField label="Stop-loss move" value={common.stopLoss} onChange={(value) => setCommon((current) => ({ ...current, stopLoss: value }))} />
+            <ConfigField label="Maximum hold (min)" value={common.maxHoldMinutes} onChange={(value) => setCommon((current) => ({ ...current, maxHoldMinutes: value }))} integer />
+            <ConfigField label="Cooldown (min)" value={common.cooldownMinutes} onChange={(value) => setCommon((current) => ({ ...current, cooldownMinutes: value }))} integer />
+            <ConfigField label="Slippage / side" value={common.slippage} onChange={(value) => setCommon((current) => ({ ...current, slippage: value }))} />
+            <ConfigField label="Maximum fill delay (min)" value={common.maxFillDelayMinutes} onChange={(value) => setCommon((current) => ({ ...current, maxFillDelayMinutes: value }))} integer />
           </div>
           {!parsed.success && <div className="validation-summary" role="alert"><CircleAlert />{parsed.error.issues[0]?.message ?? "Review the configuration."}</div>}
           <button className="button button-primary button-wide" type="button" disabled={!selected || !parsed.success || launching} onClick={() => void launch()}>{launching ? "Launching…" : "Launch backtest"} <ArrowRight /></button>
@@ -1338,28 +1402,50 @@ function NewBacktestPage() {
 }
 
 function ConfigField(props: {
-  field: keyof BacktestFormState;
-  form: BacktestFormState;
   integer?: boolean;
   label: string;
-  setForm: React.Dispatch<React.SetStateAction<BacktestFormState>>;
+  onChange: (value: string) => void;
+  value: string;
 }) {
-  return <label><span>{props.label}</span><input inputMode={props.integer ? "numeric" : "decimal"} value={props.form[props.field]} onChange={(event) => props.setForm((current) => ({ ...current, [props.field]: event.target.value }))} /></label>;
+  return <label><span>{props.label}</span><input inputMode={props.integer ? "numeric" : "decimal"} value={props.value} onChange={(event) => props.onChange(event.target.value)} /></label>;
 }
 
-function configFromForm(form: BacktestFormState): MomentumBacktestConfig {
+function configFromForm(
+  strategy: BacktestStrategy,
+  common: CommonBacktestFormState,
+  drafts: StrategyFormDrafts,
+): BacktestConfig {
+  const shared = {
+    initialCapital: common.initialCapital,
+    positionSizePct: common.positionSizePct,
+    takeProfit: common.takeProfit,
+    stopLoss: common.stopLoss,
+    maxHoldMinutes: Number(common.maxHoldMinutes),
+    cooldownMinutes: Number(common.cooldownMinutes),
+    slippage: common.slippage,
+    maxFillDelayMinutes: Number(common.maxFillDelayMinutes),
+  };
+  if (strategy === "momentum_v1") {
+    return {
+      strategy,
+      ...shared,
+      momentumWindowMinutes: Number(drafts.momentum_v1.momentumWindowMinutes),
+      momentumThreshold: drafts.momentum_v1.momentumThreshold,
+    };
+  }
+  if (strategy === "mean_reversion_v1") {
+    return {
+      strategy,
+      ...shared,
+      reversionWindowMinutes: Number(drafts.mean_reversion_v1.reversionWindowMinutes),
+      reversionThreshold: drafts.mean_reversion_v1.reversionThreshold,
+    };
+  }
   return {
-    strategy: "momentum_v1",
-    initialCapital: form.initialCapital,
-    positionSizePct: form.positionSizePct,
-    momentumWindowMinutes: Number(form.momentumWindowMinutes),
-    momentumThreshold: form.momentumThreshold,
-    takeProfit: form.takeProfit,
-    stopLoss: form.stopLoss,
-    maxHoldMinutes: Number(form.maxHoldMinutes),
-    cooldownMinutes: Number(form.cooldownMinutes),
-    slippage: form.slippage,
-    maxFillDelayMinutes: Number(form.maxFillDelayMinutes),
+    strategy,
+    ...shared,
+    breakoutWindowMinutes: Number(drafts.breakout_v1.breakoutWindowMinutes),
+    breakoutThreshold: drafts.breakout_v1.breakoutThreshold,
   };
 }
 
@@ -1466,6 +1552,14 @@ function compactIdentifier(value: string): string {
 
 function phaseLabel(value: AgentBacktestReference["phase"]): string {
   return ({ queued: "Queued", fetching: "Fetching", simulating: "Simulating", saving: "Saving", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[value];
+}
+
+function strategyName(value: BacktestStrategy): string {
+  return ({
+    momentum_v1: "Momentum",
+    mean_reversion_v1: "Mean reversion",
+    breakout_v1: "Breakout",
+  })[value];
 }
 
 function formatDate(value: string): string {

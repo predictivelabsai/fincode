@@ -4,8 +4,14 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from polytrade_backtest.engine import PriceObservation, fee_for, run_momentum_backtest
-from polytrade_backtest.schemas import MomentumBacktestConfig
+from polytrade_backtest.engine import PriceObservation, fee_for, run_backtest, run_momentum_backtest
+from polytrade_backtest.schemas import (
+    BreakoutBacktestConfig,
+    CreateBacktestRequest,
+    MeanReversionBacktestConfig,
+    MomentumBacktestConfig,
+    parse_backtest_config,
+)
 
 
 def point(start: datetime, minute: int, price: str) -> PriceObservation:
@@ -23,6 +29,20 @@ def test_fee_formula_rounds_to_five_decimals() -> None:
 def test_date_ranges_must_be_timezone_aware() -> None:
     with pytest.raises(ValidationError, match="timezone"):
         MomentumBacktestConfig(start_at=datetime(2026, 5, 1))
+
+
+def test_strategy_configs_default_to_momentum_and_reject_cross_strategy_fields() -> None:
+    request = CreateBacktestRequest(market_id="condition-1", config={})
+    assert request.config.strategy == "momentum_v1"
+    with pytest.raises(ValidationError, match="momentumWindowMinutes"):
+        parse_backtest_config(
+            {
+                "strategy": "mean_reversion_v1",
+                "momentumWindowMinutes": 30,
+            }
+        )
+    with pytest.raises(ValidationError, match="greater than zero"):
+        BreakoutBacktestConfig(breakout_threshold="0")
 
 
 def test_signal_and_exits_fill_at_the_next_observation() -> None:
@@ -194,3 +214,83 @@ def test_no_outcome_can_trigger_independently() -> None:
 
     assert output.trades[0].outcome == "NO"
     assert output.trades[0].exit_reason == "settlement"
+
+
+def test_mean_reversion_uses_prior_window_and_fills_next_observation() -> None:
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    yes = flat_history(start, "0.50", 6)
+    yes[2] = point(start, 2, "0.40")
+    yes[3] = point(start, 3, "0.41")
+    output = run_backtest(
+        {"YES": yes, "NO": flat_history(start, "0.50", 6)},
+        resolved_outcome="YES",
+        fee_rate=Decimal("0"),
+        config=MeanReversionBacktestConfig(
+            reversion_window_minutes=2,
+            reversion_threshold="0.10",
+            slippage="0",
+        ),
+    )
+
+    assert len(output.trades) == 1
+    assert output.trades[0].outcome == "YES"
+    assert output.trades[0].entry_at == start + timedelta(minutes=3)
+    assert output.trades[0].entry_price == "0.41"
+
+
+def test_breakout_excludes_current_price_and_uses_yes_tie_breaker() -> None:
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    histories = {
+        "YES": [
+            point(start, 0, "0.40"),
+            point(start, 1, "0.50"),
+            point(start, 2, "0.45"),
+            point(start, 3, "0.53"),
+            point(start, 4, "0.54"),
+        ],
+        "NO": [
+            point(start, 0, "0.40"),
+            point(start, 1, "0.50"),
+            point(start, 2, "0.45"),
+            point(start, 3, "0.53"),
+            point(start, 4, "0.54"),
+        ],
+    }
+    output = run_backtest(
+        histories,
+        resolved_outcome="YES",
+        fee_rate=Decimal("0"),
+        config=BreakoutBacktestConfig(
+            breakout_window_minutes=3,
+            breakout_threshold="0.02",
+            slippage="0",
+        ),
+    )
+
+    assert len(output.trades) == 1
+    assert output.trades[0].outcome == "YES"
+    assert output.trades[0].entry_at == start + timedelta(minutes=4)
+    assert output.trades[0].entry_price == "0.54"
+
+
+def test_breakout_does_not_signal_when_price_only_matches_prior_high() -> None:
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    history = [
+        point(start, 0, "0.40"),
+        point(start, 1, "0.50"),
+        point(start, 2, "0.45"),
+        point(start, 3, "0.50"),
+        point(start, 4, "0.50"),
+    ]
+    output = run_backtest(
+        {"YES": history, "NO": history},
+        resolved_outcome="YES",
+        fee_rate=Decimal("0"),
+        config=BreakoutBacktestConfig(
+            breakout_window_minutes=3,
+            breakout_threshold="0.01",
+            slippage="0",
+        ),
+    )
+
+    assert output.trades == []

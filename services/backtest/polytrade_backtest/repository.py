@@ -16,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool
 from .config import BacktestSettings
 from .market import HistoricalDataset, decode_dataset
 from .schemas import (
+    BacktestConfig,
     BacktestFailure,
     BacktestMetrics,
     BacktestResult,
@@ -25,7 +26,7 @@ from .schemas import (
     BacktestSeriesResponse,
     BacktestTrade,
     BacktestTradesResponse,
-    MomentumBacktestConfig,
+    parse_backtest_config,
 )
 
 ASSUMPTIONS = [
@@ -52,7 +53,7 @@ class RunClaim:
     run_id: UUID
     principal_id: str
     market_id: str
-    config: MomentumBacktestConfig
+    config: BacktestConfig
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ class BacktestRepository:
         self,
         principal_id: str,
         market_id: str,
-        config: MomentumBacktestConfig,
+        config: BacktestConfig,
         idempotency_key: str,
         request_hash: str,
     ) -> CreateRunResult:
@@ -275,7 +276,7 @@ class BacktestRepository:
                     run_id=run_id,
                     principal_id=row["principal_id"],
                     market_id=row["market_id"],
-                    config=MomentumBacktestConfig.model_validate(row["config"]),
+                    config=parse_backtest_config(row["config"]),
                 )
 
     async def _cancel_queued(self, connection: Any, run_id: UUID) -> None:
@@ -850,7 +851,7 @@ def _run_from_row(row: dict[str, Any]) -> BacktestRun:
         status=row["status"],
         phase=row["phase"],
         progress=row["progress"],
-        config=MomentumBacktestConfig.model_validate(row["config"]),
+        config=parse_backtest_config(row["config"]),
         resolved_outcome=row.get("resolved_outcome"),
         dataset_hash=row.get("dataset_hash"),
         cancel_requested=row.get("cancel_requested", False),

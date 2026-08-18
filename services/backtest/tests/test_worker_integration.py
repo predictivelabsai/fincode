@@ -11,12 +11,31 @@ from polytrade_backtest.config import get_settings
 from polytrade_backtest.engine import PriceObservation
 from polytrade_backtest.market import MarketSnapshot, build_dataset
 from polytrade_backtest.repository import BacktestRepository, request_fingerprint
-from polytrade_backtest.schemas import MomentumBacktestConfig
+from polytrade_backtest.schemas import (
+    BacktestConfig,
+    BreakoutBacktestConfig,
+    MeanReversionBacktestConfig,
+    MomentumBacktestConfig,
+)
 from polytrade_backtest.tasks import PolymarketHistoryClient, run_backtest_task
 
 
 @pytest.mark.asyncio
-async def test_mocked_celery_task_persists_a_complete_display_envelope(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "config",
+    [
+        MomentumBacktestConfig(slippage="0"),
+        MeanReversionBacktestConfig(slippage="0"),
+        BreakoutBacktestConfig(
+            breakout_window_minutes=60,
+            breakout_threshold="0.05",
+            slippage="0",
+        ),
+    ],
+)
+async def test_mocked_celery_task_persists_a_complete_display_envelope(
+    monkeypatch, config: BacktestConfig
+) -> None:
     database_url = os.environ.get("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("TEST_DATABASE_URL is not configured")
@@ -25,8 +44,7 @@ async def test_mocked_celery_task_persists_a_complete_display_envelope(monkeypat
     suffix = uuid4().hex
     owner = f"assethero:worker-{suffix}"
     market_id = f"condition-{suffix}"
-    dataset = _worker_dataset(market_id)
-    config = MomentumBacktestConfig(slippage="0")
+    dataset = _worker_dataset(market_id, config.strategy)
 
     async def fetch_dataset(_client, condition_id, requested_config):
         assert condition_id == market_id
@@ -68,15 +86,19 @@ async def test_mocked_celery_task_persists_a_complete_display_envelope(monkeypat
         await repository.close()
 
 
-def _worker_dataset(condition_id: str):
+def _worker_dataset(condition_id: str, strategy: str):
     start = datetime(2026, 5, 1, tzinfo=UTC)
     end = start + timedelta(minutes=70)
+    starting_price = "0.50" if strategy == "mean_reversion_v1" else "0.40"
+    signal_price = "0.40" if strategy == "mean_reversion_v1" else "0.46"
     yes = [
-        PriceObservation(start + timedelta(minutes=minute), Decimal("0.40"))
+        PriceObservation(start + timedelta(minutes=minute), Decimal(starting_price))
         for minute in range(71)
     ]
     for minute in range(60, 71):
-        yes[minute] = PriceObservation(start + timedelta(minutes=minute), Decimal("0.46"))
+        yes[minute] = PriceObservation(
+            start + timedelta(minutes=minute), Decimal(signal_price)
+        )
     no = [
         PriceObservation(start + timedelta(minutes=minute), Decimal("0.60"))
         for minute in range(71)

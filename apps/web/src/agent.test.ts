@@ -98,7 +98,7 @@ describe("runAgentTurn", () => {
       { value: proposal, expiresAt: "2026-08-03T00:02:00.000Z" },
     ]);
     expect(backtests).toEqual([
-      expect.objectContaining({ runId: BACKTEST_ID, status: "queued" }),
+      expect.objectContaining({ runId: BACKTEST_ID, status: "queued", strategy: "momentum_v1" }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondCall = fetchMock.mock.calls[1];

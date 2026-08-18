@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   accountOverviewSchema,
+  backtestConfigSchema,
+  breakoutBacktestConfigSchema,
+  defaultBreakoutBacktestConfig,
+  defaultMeanReversionBacktestConfig,
   isBacktestEligibleMarket,
   marketSearchResponseSchema,
   momentumBacktestConfigSchema,
@@ -112,6 +116,34 @@ describe("momentumBacktestConfigSchema", () => {
       startAt: "2026-06-02T00:00:00.000Z",
       endAt: "2026-06-01T00:00:00.000Z",
     })).toThrow(/later than startAt/);
+  });
+
+  it("defaults an untagged config to momentum", () => {
+    expect(backtestConfigSchema.parse({}).strategy).toBe("momentum_v1");
+  });
+
+  it("applies defaults for the two additional strategies", () => {
+    expect(defaultMeanReversionBacktestConfig).toMatchObject({
+      strategy: "mean_reversion_v1",
+      reversionWindowMinutes: 60,
+      reversionThreshold: "0.05",
+    });
+    expect(defaultBreakoutBacktestConfig).toMatchObject({
+      strategy: "breakout_v1",
+      breakoutWindowMinutes: 240,
+      breakoutThreshold: "0.02",
+    });
+  });
+
+  it("rejects cross-strategy fields and non-positive new thresholds", () => {
+    expect(() => backtestConfigSchema.parse({
+      strategy: "mean_reversion_v1",
+      momentumWindowMinutes: 30,
+    })).toThrow();
+    expect(() => breakoutBacktestConfigSchema.parse({
+      strategy: "breakout_v1",
+      breakoutThreshold: "0",
+    })).toThrow(/greater than zero/);
   });
 });
 

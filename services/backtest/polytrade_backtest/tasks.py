@@ -9,8 +9,8 @@ from celery import Task
 
 from .celery_app import celery_app
 from .config import get_settings
-from .engine import run_momentum_backtest
-from .market import MarketDataError, PolymarketHistoryClient
+from .engine import run_backtest
+from .market import MarketDataError, PolymarketHistoryClient, validate_dataset_history
 from .repository import BacktestRepository
 
 logger = logging.getLogger("polytrade.backtest.worker")
@@ -57,12 +57,20 @@ async def _execute(run_id: UUID) -> None:
                 claim.market_id, claim.config
             )
             await repository.save_dataset(dataset)
+        validate_dataset_history(dataset.histories, claim.config)
         await repository.set_market_metadata(run_id, dataset)
         if await repository.cancellation_requested(run_id):
             await repository.finish_cancelled(run_id)
             return
-        await repository.progress(run_id, "simulating", 55, "Replaying momentum strategy")
-        output = run_momentum_backtest(
+        strategy_name = {
+            "momentum_v1": "momentum",
+            "mean_reversion_v1": "mean-reversion",
+            "breakout_v1": "breakout",
+        }[claim.config.strategy]
+        await repository.progress(
+            run_id, "simulating", 55, f"Replaying {strategy_name} strategy"
+        )
+        output = run_backtest(
             dataset.histories,
             resolved_outcome=dataset.snapshot.resolved_outcome,
             fee_rate=dataset.snapshot.fee_rate,

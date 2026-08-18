@@ -172,6 +172,7 @@ class BacktestRunReference(ContractModel):
     run_id: UUID
     market_id: str
     market_question: str | None = None
+    strategy: Literal["momentum_v1", "mean_reversion_v1", "breakout_v1"] = "momentum_v1"
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     phase: Literal[
         "queued", "fetching", "simulating", "saving", "completed", "failed", "cancelled"

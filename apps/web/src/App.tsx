@@ -66,9 +66,9 @@ type BusyAction = "agent" | "wallet" | "submit" | "account" | "cancel" | null;
 type Workspace = "trade" | "backtests";
 
 const STARTER_QUESTIONS = [
-  "Find active election markets with the most liquidity",
-  "What does the order book imply for the leading Fed market?",
-  "Backtest momentum_v1 on a resolved election market",
+  "Backtest mean reversion on a resolved election market",
+  "Find a liquid active market for a paper-trading setup",
+  "Research the leading Fed market and summarize its order book",
 ];
 
 export default function App() {
@@ -85,7 +85,7 @@ export default function App() {
     {
       id: "welcome",
       role: "assistant",
-      text: "Ask me about a Polymarket market, its order book, price history, or your connected account. I can also replay momentum_v1 on a resolved binary market. Real orders always remain a separate, reviewed action.",
+      text: "Ask me about a Polymarket market, its order book, price history, or your connected account. I can also replay momentum, mean reversion, or breakout on a resolved binary market. Real orders always remain a separate, reviewed action.",
     },
   ]);
   const [question, setQuestion] = useState("");
@@ -491,7 +491,7 @@ export default function App() {
           focusedRunId={focusedBacktestId}
           onAskAgent={() => {
             setWorkspace("trade");
-            setQuestion((current) => current || "Backtest momentum_v1 on a resolved binary Polymarket market");
+            setQuestion((current) => current || "Backtest a strategy on a resolved binary Polymarket market");
           }}
           onError={(message) => { setError(message); setNotice(null); }}
           onNotice={(message) => { setNotice(message); setError(null); }}

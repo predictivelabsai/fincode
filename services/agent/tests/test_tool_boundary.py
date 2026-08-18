@@ -77,6 +77,7 @@ class ToolCallingDeepSeek(DeepSeekThinkingChat):
 
 class BacktestCallingDeepSeek(DeepSeekThinkingChat):
     _call_count: int = PrivateAttr(default=0)
+    _backtest_args: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def _generate(
         self,
@@ -105,7 +106,7 @@ class BacktestCallingDeepSeek(DeepSeekThinkingChat):
                 tool_calls=[
                     {
                         "name": "start_polymarket_backtest",
-                        "args": {"market_id": "condition-1"},
+                        "args": {"market_id": "condition-1", **self._backtest_args},
                         "id": "backtest-start-1",
                         "type": "tool_call",
                     }
@@ -248,6 +249,90 @@ async def test_gateway_bearer_is_taken_only_from_request_context() -> None:
     assert route.call_count == 1
     assert route.calls.last.request.headers["Authorization"] == f"Bearer {bearer_fixture}"
     assert bearer_fixture not in repr(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "strategy_fields"),
+    [
+        (
+            {
+                "strategy": "mean_reversion_v1",
+                "reversion_window_minutes": 90,
+                "reversion_threshold": "0.07",
+            },
+            {
+                "strategy": "mean_reversion_v1",
+                "reversionWindowMinutes": 90,
+                "reversionThreshold": "0.07",
+            },
+        ),
+        (
+            {
+                "strategy": "breakout_v1",
+                "breakout_window_minutes": 180,
+                "breakout_threshold": "0.03",
+            },
+            {
+                "strategy": "breakout_v1",
+                "breakoutWindowMinutes": 180,
+                "breakoutThreshold": "0.03",
+            },
+        ),
+    ],
+)
+async def test_agent_forwards_only_the_selected_strategy_parameters(
+    arguments: dict[str, Any], strategy_fields: dict[str, Any]
+) -> None:
+    model = BacktestCallingDeepSeek(
+        model="deepseek-v4-flash",
+        api_key="test",
+        reasoning_effort="max",
+        extra_body={"thinking": {"type": "enabled"}},
+    )
+    model._backtest_args = arguments
+    agent = build_agent(model=model)
+
+    with respx.mock:
+        respx.get("http://localhost:4000/v1/research/markets").mock(
+            return_value=httpx.Response(200, json={"events": []})
+        )
+        create_route = respx.post("http://localhost:8100/v1/backtests").mock(
+            return_value=httpx.Response(
+                202,
+                json={
+                    "run": {
+                        "runId": "11111111-1111-4111-8111-111111111111",
+                        "marketId": "condition-1",
+                        "status": "queued",
+                        "phase": "queued",
+                        "progress": 0,
+                        "createdAt": "2026-08-04T00:00:00Z",
+                    }
+                },
+            )
+        )
+        await agent.ainvoke(
+            {"messages": [HumanMessage(content="Run the selected strategy")]},
+            context=AgentRunContext(
+                principal_id="assethero:user-123",
+                scopes=("research",),
+                gateway_bearer="request-scoped-research-token",
+            ),
+        )
+
+    config = json.loads(create_route.calls.last.request.content)["config"]
+    assert config == {
+        **strategy_fields,
+        "initialCapital": "10000",
+        "positionSizePct": "0.10",
+        "takeProfit": "0.10",
+        "stopLoss": "0.05",
+        "maxHoldMinutes": 1440,
+        "cooldownMinutes": 60,
+        "slippage": "0.01",
+        "maxFillDelayMinutes": 5,
+    }
 
 
 @pytest.mark.asyncio
