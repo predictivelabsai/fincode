@@ -2682,7 +2682,7 @@ th small {
   display: grid;
   grid-template-columns: minmax(250px, 0.7fr) minmax(420px, 1.3fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .settings-card {

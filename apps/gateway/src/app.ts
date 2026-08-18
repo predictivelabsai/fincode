@@ -181,7 +181,6 @@ export async function buildApp(deps: AppDependencies) {
     }
   });
 
-  app.get("/v1/eligibility", { preHandler: authenticate("research"), schema: { tags: ["eligibility"] } }, (request) => deps.trading.eligibility(request.ip));
   app.get("/v1/research/markets", { preHandler: authenticate("research"), schema: { tags: ["research"], querystring: marketQuery } }, (request) => {
     const query = marketQuery.parse(request.query);
     return deps.polymarket.searchMarkets(query.query, query.limit, query.state);
@@ -255,12 +254,12 @@ export async function buildApp(deps: AppDependencies) {
   app.post("/v1/wallet-sessions/challenge", { preHandler: authenticate("trade"), schema: { tags: ["wallet"], body: walletChallengeRequestSchema } }, (request) => {
     const body = walletChallengeRequestSchema.parse(request.body);
     return runIdempotent(request, "wallet-session.challenge", body, () =>
-      deps.trading.createChallenge(principal(request), request.ip, body));
+      deps.trading.createChallenge(principal(request), body));
   });
   app.post("/v1/wallet-sessions", { preHandler: authenticate("trade"), schema: { tags: ["wallet"], body: walletSessionRequestSchema } }, (request) => {
     const body = walletSessionRequestSchema.parse(request.body);
     return runIdempotent(request, "wallet-session.create", body, () =>
-      deps.trading.createSession(principal(request), request.ip, body.challengeId, body.signature as Hex));
+      deps.trading.createSession(principal(request), body.challengeId, body.signature as Hex));
   });
   app.get("/v1/wallet-sessions/current", {
     preHandler: authenticate("trade"),
@@ -285,7 +284,7 @@ export async function buildApp(deps: AppDependencies) {
     const body = createIntentRequestSchema.parse(request.body);
     const key = idempotency(request);
     return runIdempotent(request, "order-intent.create", body, () =>
-      deps.trading.createIntent(principal(request), request.ip, body.sessionId, body.proposal, `single:${key}`));
+      deps.trading.createIntent(principal(request), body.sessionId, body.proposal, `single:${key}`));
   });
   app.post("/v1/order-intents/batch", { preHandler: authenticate("trade"), schema: { tags: ["orders"], body: batchIntentSchema } }, async (request) => {
     const body = batchIntentSchema.parse(request.body);
@@ -293,7 +292,7 @@ export async function buildApp(deps: AppDependencies) {
     return runIdempotent(request, "order-intent.batch-create", body, async () => {
       const intents = [];
       for (const [index, proposal] of body.proposals.entries()) {
-        intents.push(await deps.trading.createIntent(principal(request), request.ip, body.sessionId, proposal, `batch:${key}:${index}`));
+        intents.push(await deps.trading.createIntent(principal(request), body.sessionId, proposal, `batch:${key}:${index}`));
       }
       return { intents };
     });
@@ -302,14 +301,14 @@ export async function buildApp(deps: AppDependencies) {
     const { intentId } = intentParams.parse(request.params);
     const body = submitIntentRequestSchema.parse(request.body);
     return runIdempotent(request, "order-intent.submit", { intentId, ...body }, () =>
-      deps.trading.submitIntent(principal(request), request.ip, intentId, body.signature as Hex));
+      deps.trading.submitIntent(principal(request), intentId, body.signature as Hex));
   });
   app.post("/v1/order-intents/batch/submit", { preHandler: authenticate("trade"), schema: { tags: ["orders"], body: batchSubmitSchema } }, async (request) => {
     const body = batchSubmitSchema.parse(request.body);
     return runIdempotent(request, "order-intent.batch-submit", body, async () => {
       const results = [];
       for (const item of body.items) {
-        results.push({ intentId: item.intentId, result: await deps.trading.submitIntent(principal(request), request.ip, item.intentId, item.signature as Hex) });
+        results.push({ intentId: item.intentId, result: await deps.trading.submitIntent(principal(request), item.intentId, item.signature as Hex) });
       }
       return { results };
     });

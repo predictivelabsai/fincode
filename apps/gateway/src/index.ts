@@ -4,7 +4,6 @@ import { createJwtVerifier } from "./auth.js";
 import { buildApp } from "./app.js";
 import { parseConfig } from "./config.js";
 import { CredentialCipher } from "./crypto.js";
-import { GeoblockService } from "./geoblock.js";
 import { PostgresPaperStore } from "./paper-store.js";
 import { PostgresPaperStrategyStore } from "./paper-strategy-store.js";
 import { PaperStrategyBackgroundRunner, PaperStrategyService } from "./paper-strategy.js";
@@ -25,11 +24,7 @@ const pool = new pg.Pool({
 const store = new PostgresTradingStore(pool);
 const cipher = new CredentialCipher(config.credentialKey);
 const polymarket = new PolymarketAdapter(config);
-const geoblock = new GeoblockService(
-  config.POLYMARKET_GEOBLOCK_URL,
-  config.POLYMARKET_REQUEST_TIMEOUT_MS,
-);
-const trading = new TradingService(config, store, cipher, polymarket, geoblock);
+const trading = new TradingService(config, store, cipher, polymarket);
 const paperStore = new PostgresPaperStore(pool);
 const paper = new PaperTradingService(paperStore, polymarket);
 const paperStrategyStore = new PostgresPaperStrategyStore(pool);

@@ -17,6 +17,11 @@ the owning upstream, stream SSE without buffering, and replace transport errors
 with sanitized `502` or `504` responses. Agent and backtest container ports are
 not published on the host.
 
+Geographic eligibility is enforced only in the browser, which queries
+Polymarket's geoblock endpoint from the user's own connection. The gateway
+carries no server-side geographic check, so this gate is client-controlled and
+is bypassed by any caller that skips the web application.
+
 Creation and cancellation require idempotency keys. PostgreSQL enforces one
 queued/running run per principal, and a task UUID is atomically claimed before
 work begins. Public failures contain stable codes and safe messages rather than
@@ -42,7 +47,7 @@ Persistent paper strategies keep the same boundary. PostgreSQL leases prevent
 multiple gateway replicas from running one scan, deterministic scan keys prevent
 duplicate fills after lease recovery, and the strategy's running state and
 maximum position are rechecked in the ledger transaction. The background runner
-receives no wallet credentials and cannot call live-order or geoblock code.
+receives no wallet credentials and cannot call live-order code.
 
 Immutable normalized datasets use canonical JSON, deterministic gzip metadata,
 and a SHA-256 key. Decimal calculations avoid binary floating-point execution

@@ -31,14 +31,6 @@ import {
 } from "@polytrade/contracts";
 import type { Hex } from "viem";
 
-export interface Eligibility {
-  blocked: boolean;
-  verified: boolean;
-  country: string;
-  region: string;
-  checkedAt: string;
-}
-
 export interface AccountSnapshot {
   walletAddress: string;
   funderAddress?: string;
@@ -63,10 +55,6 @@ export class GatewayClient {
     private readonly baseUrl: string,
     private readonly getToken: () => Promise<string>,
   ) {}
-
-  eligibility(): Promise<Eligibility> {
-    return this.request("/v1/eligibility");
-  }
 
   createChallenge(body: WalletChallengeRequest): Promise<WalletChallengeResponse> {
     return this.request("/v1/wallet-sessions/challenge", {

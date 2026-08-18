@@ -40,7 +40,8 @@ Required claims:
 The canonical owner is `assethero:<sub>`. It is deliberately separate from a
 PolyTrade Clerk owner such as `clerk:<sub>`; matching email addresses do not
 link accounts. The `trade` scope authorizes wallet/order API access but never
-substitutes for wallet signatures or geographic eligibility.
+substitutes for wallet signatures. The gateway applies no geographic check;
+geographic eligibility is the calling application's responsibility.
 
 If AssetHero's browser calls PolyTrade directly, its exact HTTPS origin must be
 listed in `CORS_ORIGINS`. Backend-to-backend requests do not require CORS.

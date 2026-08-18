@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { parseConfig } from "../src/config.js";
 import { CredentialCipher } from "../src/crypto.js";
-import { GeoblockService } from "../src/geoblock.js";
 import { TradingService } from "../src/trading.js";
 import type { Principal, WalletSessionRecord } from "../src/types.js";
 import { FakePolymarket, MemoryTradingStore } from "./fakes.js";
@@ -24,25 +23,12 @@ function config() {
   });
 }
 
-function setup(options: { blocked?: boolean; unavailable?: boolean; verifiedIp?: boolean } = {}) {
+function setup() {
   const settings = config();
   const store = new MemoryTradingStore();
   const polymarket = new FakePolymarket();
-  const geoblock = new GeoblockService("https://polymarket.test/geoblock", 1_000, async (_input, init) => {
-    if (options.unavailable) throw new TypeError("upstream unavailable");
-    const headers = new Headers(init?.headers);
-    return new Response(JSON.stringify({
-      blocked: options.blocked ?? false,
-      ip: options.verifiedIp === false ? "198.51.100.2" : headers.get("X-Real-IP"),
-      country: options.blocked ? "AU" : "US",
-      region: options.blocked ? "VIC" : "NY",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  });
   const cipher = new CredentialCipher(settings.credentialKey);
-  const service = new TradingService(settings, store, cipher, polymarket, geoblock, () => now);
+  const service = new TradingService(settings, store, cipher, polymarket, () => now);
   return { settings, store, polymarket, cipher, service };
 }
 
@@ -86,17 +72,17 @@ function proposal(execution: "GTC" | "GTD" | "FOK" | "FAK"): CreateOrderProposal
 describe("TradingService", () => {
   it("creates a single-use wallet challenge and encrypted session", async () => {
     const context = setup();
-    const challenge = await context.service.createChallenge(principal, "203.0.113.9", {
+    const challenge = await context.service.createChallenge(principal, {
       walletAddress: account.address,
       signatureType: 0,
     });
     const signature = await account.signTypedData(challenge.typedData as never);
-    const session = await context.service.createSession(principal, "203.0.113.9", challenge.challengeId, signature);
+    const session = await context.service.createSession(principal, challenge.challengeId, signature);
 
     expect(session.walletAddress).toBe(account.address);
     expect(context.store.sessions.get(session.sessionId)?.encryptedCredentials).not.toContain("secret");
     await expect(
-      context.service.createSession(principal, "203.0.113.9", challenge.challengeId, signature),
+      context.service.createSession(principal, challenge.challengeId, signature),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -205,7 +191,6 @@ describe("TradingService", () => {
     for (const execution of ["GTC", "GTD", "FOK", "FAK"] as const) {
       const intent = await context.service.createIntent(
         principal,
-        "203.0.113.9",
         "00000000-0000-4000-8000-000000000001",
         proposal(execution),
         `intent-${execution}`,
@@ -221,23 +206,22 @@ describe("TradingService", () => {
     await addSession(context);
     const intent = await context.service.createIntent(
       principal,
-      "203.0.113.9",
       "00000000-0000-4000-8000-000000000001",
       proposal("GTC"),
       "intent-submit",
     );
     const signature = await account.signTypedData(intent.typedData as never);
-    const result = await context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature) as { success: boolean };
+    const result = await context.service.submitIntent(principal, intent.intentId, signature) as { success: boolean };
     expect(result.success).toBe(true);
     expect(context.polymarket.preflighted).toHaveLength(2);
     await expect(
-      context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature),
+      context.service.submitIntent(principal, intent.intentId, signature),
     ).resolves.toEqual(result);
     expect(context.polymarket.submitted).toHaveLength(1);
 
     await expect(context.service.account(otherPrincipal)).rejects.toMatchObject({ statusCode: 404 });
     await expect(
-      context.service.submitIntent(otherPrincipal, "203.0.113.9", intent.intentId, signature),
+      context.service.submitIntent(otherPrincipal, intent.intentId, signature),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -246,7 +230,6 @@ describe("TradingService", () => {
     await addSession(context);
     const intent = await context.service.createIntent(
       principal,
-      "203.0.113.9",
       "00000000-0000-4000-8000-000000000001",
       proposal("GTC"),
       "intent-concurrent",
@@ -254,8 +237,8 @@ describe("TradingService", () => {
     const signature = await account.signTypedData(intent.typedData as never);
 
     const results = await Promise.allSettled([
-      context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature),
-      context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature),
+      context.service.submitIntent(principal, intent.intentId, signature),
+      context.service.submitIntent(principal, intent.intentId, signature),
     ]);
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -268,7 +251,6 @@ describe("TradingService", () => {
     await addSession(context);
     const intent = await context.service.createIntent(
       principal,
-      "203.0.113.9",
       "00000000-0000-4000-8000-000000000001",
       proposal("GTC"),
       "intent-expired",
@@ -277,7 +259,7 @@ describe("TradingService", () => {
     const signature = await account.signTypedData(intent.typedData as never);
 
     await expect(
-      context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature),
+      context.service.submitIntent(principal, intent.intentId, signature),
     ).rejects.toMatchObject({ statusCode: 409 });
     expect(context.store.intents.get(intent.intentId)?.status).toBe("EXPIRED");
     expect(context.polymarket.submitted).toHaveLength(0);
@@ -290,14 +272,12 @@ describe("TradingService", () => {
 
     await expect(context.service.createIntent(
       principal,
-      "203.0.113.9",
       sessionId,
       { ...proposal("GTC"), observedAt: new Date(now.getTime() - 120_001).toISOString() },
       "intent-stale",
     )).rejects.toMatchObject({ statusCode: 400 });
     await expect(context.service.createIntent(
       principal,
-      "203.0.113.9",
       sessionId,
       { ...proposal("GTC"), observedAt: new Date(now.getTime() + 30_001).toISOString() },
       "intent-future",
@@ -310,18 +290,17 @@ describe("TradingService", () => {
     await addSession(context);
     const intent = await context.service.createIntent(
       principal,
-      "203.0.113.9",
       "00000000-0000-4000-8000-000000000001",
       proposal("FAK"),
       "intent-ambiguous",
     );
     const signature = await account.signTypedData(intent.typedData as never);
     context.polymarket.submitError = new Error("connection closed after write");
-    await expect(context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature)).rejects.toThrow();
+    await expect(context.service.submitIntent(principal, intent.intentId, signature)).rejects.toThrow();
     expect(context.polymarket.submitted).toHaveLength(1);
 
     context.polymarket.reconciled = { success: true, orderID: "reconciled-order" };
-    const result = await context.service.submitIntent(principal, "203.0.113.9", intent.intentId, signature) as { orderID: string };
+    const result = await context.service.submitIntent(principal, intent.intentId, signature) as { orderID: string };
     expect(result.orderID).toBe("reconciled-order");
     expect(context.polymarket.submitted).toHaveLength(1);
   });
@@ -331,7 +310,6 @@ describe("TradingService", () => {
     await addSession(context);
     const intent = await context.service.createIntent(
       principal,
-      "203.0.113.9",
       "00000000-0000-4000-8000-000000000001",
       proposal("FAK"),
       "intent-partial-fill",
@@ -349,7 +327,6 @@ describe("TradingService", () => {
 
     const result = await context.service.submitIntent(
       principal,
-      "203.0.113.9",
       intent.intentId,
       signature,
     );
@@ -371,41 +348,5 @@ describe("TradingService", () => {
     await context.service.cancel(principal, sessionId, { kind: "market", marketId: "0xcondition", tokenId: "123" });
     await context.service.cancel(principal, sessionId, { kind: "all" });
     expect(context.polymarket.cancellations.map((item) => item.kind)).toEqual(["order", "market", "all"]);
-  });
-
-  it("blocks new trading sessions by geography but preserves risk-reducing cancellation", async () => {
-    const blocked = setup({ blocked: true });
-    await expect(blocked.service.createChallenge(principal, "203.0.113.9", {
-      walletAddress: account.address,
-      signatureType: 0,
-    })).rejects.toMatchObject({ statusCode: 403 });
-    await addSession(blocked);
-    await expect(blocked.service.cancel(
-      principal,
-      "00000000-0000-4000-8000-000000000001",
-      { kind: "all" },
-    )).resolves.toMatchObject({ canceled: true });
-
-    const unverified = setup({ verifiedIp: false });
-    await expect(unverified.service.createChallenge(principal, "203.0.113.9", {
-      walletAddress: account.address,
-      signatureType: 0,
-    })).rejects.toMatchObject({ statusCode: 403 });
-  });
-
-  it("reports an unavailable eligibility check without enabling real trading", async () => {
-    const unavailable = setup({ unavailable: true });
-
-    await expect(unavailable.service.eligibility("203.0.113.9")).resolves.toMatchObject({
-      blocked: true,
-      ip: "203.0.113.9",
-      country: "",
-      region: "",
-      verified: false,
-    });
-    await expect(unavailable.service.createChallenge(principal, "203.0.113.9", {
-      walletAddress: account.address,
-      signatureType: 0,
-    })).rejects.toMatchObject({ statusCode: 503, code: "UPSTREAM_UNAVAILABLE" });
   });
 });

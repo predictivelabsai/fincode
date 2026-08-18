@@ -67,7 +67,7 @@ import {
   ProposalTicket,
   type ProposalDraft,
 } from "./App";
-import { GatewayClient, GatewayError, type Eligibility } from "./api";
+import { GatewayClient, GatewayError } from "./api";
 import {
   AgentApiError,
   createAgentThread,
@@ -81,6 +81,7 @@ import {
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
+import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { PaperWorkspace } from "./Paper";
@@ -239,13 +240,8 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [authentication.getToken, setMessage]);
 
   const refreshEligibility = useCallback(async () => {
-    try {
-      setEligibility(await gateway.eligibility());
-    } catch (caught) {
-      setEligibility(null);
-      setMessage(errorMessage(caught));
-    }
-  }, [gateway, setMessage]);
+    setEligibility(await checkBrowserEligibility());
+  }, []);
 
   const refreshAccount = useCallback(async () => {
     if (!session) return;
@@ -650,7 +646,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     submitMessage,
     threads,
     threadsLoaded,
-    tradeAllowed: Boolean(eligibility?.verified && !eligibility.blocked),
+    tradeAllowed: eligibilityAllowsTrading(eligibility),
     updateProposal,
     cancelOpenOrder,
   }), [
@@ -1163,14 +1159,14 @@ function SettingsPage() {
     workspace.session && workspace.localWallet
     && workspace.session.walletAddress.toLowerCase() === workspace.localWallet.address.toLowerCase(),
   );
-  const restricted = Boolean(!workspace.eligibility?.verified || workspace.eligibility.blocked);
+  const restricted = !workspace.tradeAllowed;
   return (
     <main className="detail-page settings-page">
-      <PageTitle eyebrow="Security and access" title="Settings" description="Identity authentication, geographic eligibility, and wallet authority remain separate layers." />
+      <PageTitle eyebrow="Security and access" title="Settings" />
       <div className="settings-grid">
         <section className="settings-card">
           <div className="settings-card-heading"><ShieldCheck /><div><span className="eyebrow">Connection status</span><h2>Eligibility</h2></div></div>
-          <StatusLine label="Geographic check" value={eligibilityLabel(workspace.eligibility)} tone={workspace.tradeAllowed ? "good" : "warn"} />
+          <StatusLine label="Browser IP check" value={eligibilityLabel(workspace.eligibility)} tone={workspace.tradeAllowed ? "good" : "warn"} />
           <StatusLine label="Country / region" value={workspace.eligibility ? `${workspace.eligibility.country || "—"} / ${workspace.eligibility.region || "—"}` : "Checking"} />
           <StatusLine label="Identity" value="Signed in with Clerk" tone="good" />
           <button className="button button-quiet" type="button" onClick={() => void workspace.refreshEligibility()}><RefreshCw /> Recheck eligibility</button>
@@ -1202,7 +1198,7 @@ function SettingsPage() {
                 {workspace.signatureType !== 0 && <label><span>Funder / maker address</span><input value={workspace.funderAddress} onChange={(event) => workspace.setFunderAddress(event.target.value)} placeholder="0x…" spellCheck={false} /></label>}
               </div>
               <button className="button button-primary" type="button" onClick={() => void workspace.connectAndVerify()} disabled={workspace.busy === "wallet" || restricted || (workspace.signatureType !== 0 && !workspace.funderAddress)}><WalletCards /> {workspace.busy === "wallet" ? "Waiting for wallet…" : "Connect and verify wallet"}</button>
-              {restricted && <p className="restriction-note">Wallet verification for new orders is unavailable until eligibility is verified.</p>}
+              {restricted && <p className="restriction-note">{eligibilityRestrictionMessage(workspace.eligibility)}</p>}
             </>
           )}
         </section>
@@ -1367,8 +1363,8 @@ function configFromForm(form: BacktestFormState): MomentumBacktestConfig {
   };
 }
 
-function PageTitle(props: { children?: ReactNode; description: string; eyebrow: string; title: string }) {
-  return <header className="page-title"><div><span className="eyebrow">{props.eyebrow}</span><h1>{props.title}</h1><p>{props.description}</p></div>{props.children && <div className="page-title-actions">{props.children}</div>}</header>;
+function PageTitle(props: { children?: ReactNode; description?: string; eyebrow: string; title: string }) {
+  return <header className="page-title"><div><span className="eyebrow">{props.eyebrow}</span><h1>{props.title}</h1>{props.description && <p>{props.description}</p>}</div>{props.children && <div className="page-title-actions">{props.children}</div>}</header>;
 }
 
 function DataSection(props: { children: ReactNode; count: number; title: string }) {
@@ -1448,6 +1444,16 @@ function eligibilityLabel(value: Eligibility | null): string {
   if (!value) return "Checking";
   if (!value.verified) return "Unverified";
   return value.blocked ? "Research only" : "Trading eligible";
+}
+
+function eligibilityAllowsTrading(value: Eligibility | null): boolean {
+  return Boolean(value?.verified && !value.blocked);
+}
+
+function eligibilityRestrictionMessage(browser: Eligibility | null): string {
+  if (!browser?.verified) return "The browser IP check could not be completed. New-order wallet verification remains unavailable.";
+  if (browser.blocked) return `New orders are unavailable in ${browser.country || "this browser location"}.`;
+  return "Wallet verification for new orders is unavailable.";
 }
 
 function walletTypeLabel(value: 0 | 1 | 2 | 3): string {

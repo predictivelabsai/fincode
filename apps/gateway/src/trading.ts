@@ -16,9 +16,7 @@ import { getAddress, verifyTypedData, type Hex } from "viem";
 
 import type { GatewayConfig } from "./config.js";
 import { CredentialCipher } from "./crypto.js";
-import { conflict, forbidden, notFound, validation } from "./errors.js";
-import type { Eligibility } from "./geoblock.js";
-import { GeoblockService } from "./geoblock.js";
+import { conflict, notFound, validation } from "./errors.js";
 import { buildL1TypedData, type PolymarketPort } from "./polymarket.js";
 import type { TradingStore } from "./store.js";
 import type {
@@ -38,20 +36,13 @@ export class TradingService {
     private readonly store: TradingStore,
     private readonly cipher: CredentialCipher,
     private readonly polymarket: PolymarketPort,
-    private readonly geoblock: GeoblockService,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  eligibility(clientIp: string): Promise<Eligibility> {
-    return this.geoblock.status(clientIp);
-  }
-
   async createChallenge(
     principal: Principal,
-    clientIp: string,
     request: WalletChallengeRequest,
   ): Promise<WalletChallengeResponse> {
-    await this.requireEligible(clientIp);
     const walletAddress = getAddress(request.walletAddress);
     const funderAddress = request.funderAddress ? getAddress(request.funderAddress) : undefined;
     if (request.signatureType !== 0 && !funderAddress) {
@@ -86,11 +77,9 @@ export class TradingService {
 
   async createSession(
     principal: Principal,
-    clientIp: string,
     challengeId: string,
     signature: Hex,
   ): Promise<WalletSessionResponse> {
-    await this.requireEligible(clientIp);
     const current = this.now();
     const challenge = await this.store.consumeChallenge(challengeId, principal.id, current);
     if (!challenge) throw conflict("Wallet challenge is invalid, expired, or already used");
@@ -161,12 +150,10 @@ export class TradingService {
 
   async createIntent(
     principal: Principal,
-    clientIp: string,
     sessionId: string,
     proposal: CreateOrderProposal,
     idempotencyKey: string,
   ): Promise<OrderIntentResponse> {
-    await this.requireEligible(clientIp);
     const current = this.now();
     const observedAt = Date.parse(proposal.observedAt);
     if (!Number.isFinite(observedAt) || observedAt > current.getTime() + PROPOSAL_CLOCK_SKEW_MS) {
@@ -215,7 +202,6 @@ export class TradingService {
 
   async submitIntent(
     principal: Principal,
-    clientIp: string,
     intentId: string,
     signature: Hex,
   ): Promise<unknown> {
@@ -244,7 +230,6 @@ export class TradingService {
       return reconciled;
     }
     if (intent.status !== "PENDING") throw conflict(`Order intent is ${intent.status.toLowerCase()}`);
-    await this.requireEligible(clientIp);
     if (intent.expiresAt <= current) {
       await this.store.setIntentStatus(intent.id, principal.id, "EXPIRED");
       throw conflict("Order intent has expired; review current market data again");
@@ -345,14 +330,6 @@ export class TradingService {
     );
     if (!session) throw notFound("Wallet session is missing, expired, or revoked");
     return session;
-  }
-
-  private async requireEligible(clientIp: string): Promise<void> {
-    const eligibility = await this.geoblock.check(clientIp);
-    if (!eligibility.verified) throw forbidden("Client geography could not be verified");
-    if (eligibility.blocked) {
-      throw forbidden(`New Polymarket orders are unavailable in ${eligibility.country || "this region"}`);
-    }
   }
 }
 

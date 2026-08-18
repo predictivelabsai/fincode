@@ -34,11 +34,12 @@ import {
 } from "@polytrade/contracts";
 import type { Hex } from "viem";
 
-import { GatewayClient, type AccountSnapshot, type Eligibility } from "./api";
+import { GatewayClient, type AccountSnapshot } from "./api";
 import { AgentApiError, getAgentThreadItems, runAgentTurn } from "./agent";
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
+import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { maximumExposure } from "./order";
 import { connectWallet, signTypedPayload, type ConnectedWallet } from "./wallet";
@@ -111,13 +112,8 @@ export default function App() {
   const hasInteracted = useRef(false);
 
   const refreshEligibility = useCallback(async () => {
-    try {
-      setEligibility(await gateway.eligibility());
-    } catch (caught) {
-      setEligibility(null);
-      setError(errorMessage(caught));
-    }
-  }, [gateway]);
+    setEligibility(await checkBrowserEligibility());
+  }, []);
 
   useEffect(() => {
     void refreshEligibility();

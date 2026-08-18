@@ -1,3 +1,4 @@
+import type { FastifyInstance } from "fastify";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
@@ -70,15 +71,10 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
   const store = new MemoryTradingStore();
   const polymarket = new FakePolymarket();
   let challengeCalls = 0;
-  let observedIp = "";
   const verifiedScopes: string[] = [];
   const createdIntents: unknown[] = [];
   const submittedIntents: Array<{ intentId: string; signature: string }> = [];
   const trading = {
-    eligibility: async (ip: string) => {
-      observedIp = ip;
-      return { blocked: false, verified: true, ip, country: "US", region: "NY", checkedAt: new Date().toISOString() };
-    },
     createChallenge: async () => {
       challengeCalls += 1;
       return {
@@ -106,7 +102,6 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     }),
     createIntent: async (
       _principal: Principal,
-      _clientIp: string,
       _sessionId: string,
       proposal: unknown,
     ) => {
@@ -115,7 +110,6 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     },
     submitIntent: async (
       _principal: Principal,
-      _clientIp: string,
       intentId: string,
       signature: string,
     ) => {
@@ -200,7 +194,6 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     app,
     challengeCalls: () => challengeCalls,
     createdIntents,
-    observedIp: () => observedIp,
     submittedIntents,
     verifiedScopes,
   };
@@ -228,22 +221,25 @@ describe("gateway HTTP boundary", () => {
   });
 
   it("honors forwarded client IPs only from configured proxies", async () => {
+    const remaining = async (app: FastifyInstance, forwardedFor: string) => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: { "x-forwarded-for": forwardedFor },
+      });
+      return Number(response.headers["x-ratelimit-remaining"]);
+    };
+
     const trusted = await setup();
-    await trusted.app.inject({
-      method: "GET",
-      url: "/v1/eligibility",
-      headers: { authorization: "Bearer token", "x-forwarded-for": "203.0.113.8" },
-    });
-    expect(trusted.observedIp()).toBe("203.0.113.8");
+    const trustedFirst = await remaining(trusted.app, "203.0.113.8");
+    expect(trustedFirst).toBeGreaterThan(0);
+    expect(await remaining(trusted.app, "203.0.113.9")).toBe(trustedFirst);
     await trusted.app.close();
 
     const untrusted = await setup("10.0.0.0/8");
-    await untrusted.app.inject({
-      method: "GET",
-      url: "/v1/eligibility",
-      headers: { authorization: "Bearer token", "x-forwarded-for": "203.0.113.8" },
-    });
-    expect(untrusted.observedIp()).not.toBe("203.0.113.8");
+    const untrustedFirst = await remaining(untrusted.app, "203.0.113.8");
+    expect(untrustedFirst).toBe(trustedFirst);
+    expect(await remaining(untrusted.app, "203.0.113.9")).toBe(untrustedFirst - 1);
     await untrusted.app.close();
   });
 
@@ -287,8 +283,8 @@ describe("gateway HTTP boundary", () => {
     await app.close();
   });
 
-  it("keeps paper routes on research auth without invoking wallet or geoblock flows", async () => {
-    const { app, challengeCalls, observedIp, verifiedScopes } = await setup();
+  it("keeps paper routes on research auth without invoking wallet flows", async () => {
+    const { app, challengeCalls, verifiedScopes } = await setup();
     const headers = { authorization: "Bearer token", "content-type": "application/json" };
 
     const portfolio = await app.inject({ method: "GET", url: "/v1/paper/portfolio", headers });
@@ -335,7 +331,6 @@ describe("gateway HTTP boundary", () => {
       .map((response) => response.statusCode)).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
     expect(verifiedScopes).toEqual(["research", "research", "research", "research", "research", "research", "research", "research"]);
     expect(challengeCalls()).toBe(0);
-    expect(observedIp()).toBe("");
     await app.close();
   });
 

@@ -26,10 +26,10 @@ const mocks = vi.hoisted(() => {
     backtestCreate: vi.fn(),
     backtestGet: vi.fn(),
     backtestList: vi.fn(),
+    browserEligibility: vi.fn(),
     createAgentThread: vi.fn(),
     currentWalletSession: vi.fn(),
     deleteAgentThread: vi.fn(),
-    eligibility: vi.fn(),
     getAgentThreadItems: vi.fn(),
     listAgentThreads: vi.fn(),
     paperFills: vi.fn(),
@@ -75,7 +75,6 @@ vi.mock("./agent", async (importOriginal) => {
 vi.mock("./api", () => ({
   GatewayError: mocks.GatewayError,
   GatewayClient: class GatewayClient {
-    eligibility = mocks.eligibility;
     currentWalletSession = mocks.currentWalletSession;
     accountOverview = mocks.accountOverview;
     searchMarkets = mocks.searchMarkets;
@@ -106,6 +105,10 @@ vi.mock("./backtest", () => ({
     cancel = vi.fn();
     delete = vi.fn();
   },
+}));
+
+vi.mock("./eligibility", () => ({
+  checkBrowserEligibility: mocks.browserEligibility,
 }));
 
 vi.mock("./wallet", () => ({
@@ -309,7 +312,7 @@ beforeEach(() => {
   }]));
   mocks.createAgentThread.mockResolvedValue(THREAD_A);
   mocks.deleteAgentThread.mockResolvedValue(undefined);
-  mocks.eligibility.mockResolvedValue({ blocked: false, verified: true, country: "US", region: "NY", checkedAt: new Date().toISOString() });
+  mocks.browserEligibility.mockResolvedValue({ blocked: false, verified: true, country: "US", region: "NY", checkedAt: new Date().toISOString() });
   mocks.currentWalletSession.mockRejectedValue(new mocks.GatewayError("No active wallet session", "NOT_FOUND", 404));
   mocks.accountOverview.mockResolvedValue(overview);
   mocks.paperPortfolio.mockResolvedValue(paperPortfolio);
@@ -470,6 +473,40 @@ describe("routed workspace", () => {
     expect(await screen.findByText("Not locally attached")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Attach matching wallet/i }));
     expect(await screen.findByText("Matching wallet attached")).toBeInTheDocument();
+  });
+
+  it("authorizes wallet verification from the browser IP check alone", async () => {
+    mocks.browserEligibility.mockResolvedValue({
+      blocked: false,
+      verified: true,
+      country: "NZ",
+      region: "AUK",
+      checkedAt: new Date().toISOString(),
+    });
+
+    renderRoute("/settings");
+
+    const browserStatus = (await screen.findByText("Browser IP check")).parentElement;
+    expect(browserStatus).toHaveTextContent("Trading eligible");
+    expect(screen.getByText("Country / region").parentElement).toHaveTextContent("NZ / AUK");
+    expect(screen.queryByText("Gateway enforcement")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeEnabled();
+  });
+
+  it("blocks wallet verification when the browser IP check is blocked", async () => {
+    mocks.browserEligibility.mockResolvedValue({
+      blocked: true,
+      verified: true,
+      country: "AU",
+      region: "VIC",
+      checkedAt: new Date().toISOString(),
+    });
+
+    renderRoute("/settings");
+
+    expect((await screen.findByText("Browser IP check")).parentElement).toHaveTextContent("Research only");
+    expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeDisabled();
+    expect(screen.getByText(/New orders are unavailable in AU/i)).toBeInTheDocument();
   });
 
   it("opens the isolated paper ledger and completes a preview-confirm fill", async () => {

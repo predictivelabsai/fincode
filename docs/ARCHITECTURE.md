@@ -94,15 +94,21 @@ exact EIP-712 intent. Backtest components have no dependency on wallet packages
 or gateway mutation routes, and the web Backtests workspace contains no wallet
 or real-order controls.
 
+Geographic eligibility is a browser-side check and the single authoritative
+source. The web application calls Polymarket's geoblock endpoint over the user's
+own connection and gates wallet verification and new-order controls on that
+result; a failed or unreachable check leaves them disabled. The gateway performs
+no geographic check and never rejects a request on geography, so a client that
+does not run the browser check is not geographically restricted by PolyTrade.
+
 ## Paper-trading boundary
 
 Paper trading is an authenticated gateway feature backed by five tables in the
 `polytrade` schema: one fixed 10,000-USDC account per namespaced principal,
 aggregated long-only outcome positions, an append-only fill ledger, persistent
 price-band strategy state, and an append-only strategy event tape. It uses only
-the existing `research` scope and public Gamma/CLOB reads; it never checks
-geographic eligibility, opens a wallet session, signs an intent, or calls a
-live-order mutation endpoint.
+the existing `research` scope and public Gamma/CLOB reads; it never opens a
+wallet session, signs an intent, or calls a live-order mutation endpoint.
 
 Quotes sweep visible asks for buys or bids for sells and are all-or-none. The
 preview's worst consumed price becomes a fill-or-kill bound for execution, which

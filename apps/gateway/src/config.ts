@@ -47,7 +47,6 @@ const envSchema = z.object({
   POLYMARKET_GAMMA_URL: httpsUrl.default("https://gamma-api.polymarket.com"),
   POLYMARKET_DATA_URL: httpsUrl.default("https://data-api.polymarket.com"),
   POLYMARKET_CLOB_URL: httpsUrl.default("https://clob.polymarket.com"),
-  POLYMARKET_GEOBLOCK_URL: httpsUrl.default("https://polymarket.com/api/geoblock"),
   POLYMARKET_CHAIN_ID: z.coerce.number().int().default(137),
   POLYMARKET_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   WALLET_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(600).default(300),
