@@ -3357,6 +3357,58 @@ th small {
   font-size: 0.68rem;
 }
 
+.loading-panel {
+  min-height: 180px;
+  margin-top: 14px;
+  padding: 13px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--faint);
+  font-size: 0.62rem;
+  text-align: center;
+}
+
+.loading-panel > svg {
+  width: 22px;
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+.loading-panel strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.value-placeholder {
+  display: block;
+  width: 60%;
+  min-width: 44px;
+  height: 0.82rem;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--border-soft), var(--border), var(--border-soft));
+  background-size: 200% 100%;
+  animation: placeholder-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes placeholder-sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-panel > svg,
+  .value-placeholder {
+    animation: none;
+  }
+}
+
 .replay-tape-empty svg {
   width: 22px;
   color: var(--accent);

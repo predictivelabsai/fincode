@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  BacktestResult,
   BacktestRun,
   BacktestRunEnvelope,
   BacktestSeriesPoint,
@@ -23,6 +24,15 @@ import { BacktestClient } from "./backtest";
 
 const ACTIVE_STATUSES = new Set<BacktestRun["status"]>(["queued", "running"]);
 const TRADE_PAGE_SIZE = 50;
+
+/** The chart and ledger of one run, tagged so they can never paint onto another. */
+interface RunDetails {
+  runId: string;
+  series: BacktestSeriesPoint[];
+  trades: BacktestTrade[];
+  chartTrades: BacktestTrade[];
+  tradeTotal: number;
+}
 
 export function BacktestsWorkspace(props: {
   client: BacktestClient;
@@ -36,11 +46,8 @@ export function BacktestsWorkspace(props: {
   const [runs, setRuns] = useState<BacktestRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(props.focusedRunId);
   const [envelope, setEnvelope] = useState<BacktestRunEnvelope | null>(null);
-  const [trades, setTrades] = useState<BacktestTrade[]>([]);
-  const [chartTrades, setChartTrades] = useState<BacktestTrade[]>([]);
-  const [tradeTotal, setTradeTotal] = useState(0);
+  const [details, setDetails] = useState<RunDetails | null>(null);
   const [tradePage, setTradePage] = useState(0);
-  const [series, setSeries] = useState<BacktestSeriesPoint[]>([]);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [comparisons, setComparisons] = useState<BacktestRunEnvelope[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,43 +57,72 @@ export function BacktestsWorkspace(props: {
     if (props.focusedRunId) setSelectedId(props.focusedRunId);
   }, [props.focusedRunId]);
 
-  const refresh = useCallback(async () => {
+  // The library row already carries the title, status, and configuration, so the
+  // header renders on click while the run's own responses are still in flight.
+  // Each slower piece is matched to its run id before it is shown.
+  const activeEnvelope = envelope && envelope.run.runId === selectedId ? envelope : null;
+  const activeRun = activeEnvelope?.run ?? runs.find((run) => run.runId === selectedId);
+  const activeResult = activeEnvelope?.result ?? null;
+  const activeDetails = details && details.runId === selectedId ? details : null;
+
+  const refresh = useCallback(async (isActive: () => boolean = () => true) => {
     const nextRuns = await props.client.list();
+    if (!isActive()) return nextRuns;
     setRuns(nextRuns);
     setSelectedId((current) => current ?? nextRuns[0]?.runId);
     return nextRuns;
   }, [props.client]);
 
-  const refreshSelected = useCallback(async (runId: string, page = tradePage) => {
+  const loadDetails = useCallback(async (runId: string, page: number): Promise<RunDetails> => {
+    const [nextSeries, nextTrades, nextChartTrades] = await Promise.all([
+      props.client.series(runId),
+      props.client.trades(runId, page * TRADE_PAGE_SIZE, TRADE_PAGE_SIZE),
+      props.client.trades(runId, 0, 200),
+    ]);
+    return {
+      runId,
+      series: nextSeries.points,
+      trades: nextTrades.items,
+      chartTrades: nextChartTrades.items,
+      tradeTotal: nextTrades.total,
+    };
+  }, [props.client]);
+
+  const refreshSelected = useCallback(async (
+    runId: string,
+    isActive: () => boolean = () => true,
+    listedAsCompleted = false,
+    page = tradePage,
+  ) => {
+    // A run the library already shows as completed can load its chart and trades
+    // beside the summary rather than a round trip behind it.
+    const eager = listedAsCompleted ? loadDetails(runId, page).catch(() => null) : null;
     const nextEnvelope = await props.client.get(runId);
+    if (!isActive()) return nextEnvelope;
     setEnvelope(nextEnvelope);
-    if (nextEnvelope.run.status === "completed") {
-      const [nextSeries, nextTrades, nextChartTrades] = await Promise.all([
-        props.client.series(runId),
-        props.client.trades(runId, page * TRADE_PAGE_SIZE, TRADE_PAGE_SIZE),
-        props.client.trades(runId, 0, 200),
-      ]);
-      setSeries(nextSeries.points);
-      setTrades(nextTrades.items);
-      setChartTrades(nextChartTrades.items);
-      setTradeTotal(nextTrades.total);
-    } else {
-      setSeries([]);
-      setTrades([]);
-      setChartTrades([]);
-      setTradeTotal(0);
+    if (nextEnvelope.run.status !== "completed") {
+      setDetails(null);
+      return nextEnvelope;
     }
+    const nextDetails = (await eager) ?? await loadDetails(runId, page);
+    if (!isActive()) return nextEnvelope;
+    setDetails(nextDetails);
     return nextEnvelope;
-  }, [props.client, tradePage]);
+  }, [loadDetails, props.client, tradePage]);
 
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
+    const isActive = () => !cancelled;
     const poll = async () => {
       try {
-        const nextRuns = await refresh();
+        const nextRuns = await refresh(isActive);
+        if (cancelled) return;
         const id = selectedId ?? props.focusedRunId ?? nextRuns[0]?.runId;
-        if (id) await refreshSelected(id);
+        if (id) {
+          const listed = nextRuns.find((run) => run.runId === id);
+          await refreshSelected(id, isActive, listed?.status === "completed");
+        }
       } catch (caught) {
         if (!cancelled) props.onError(messageFor(caught));
       } finally {
@@ -122,13 +158,11 @@ export function BacktestsWorkspace(props: {
   }, [compareIds, props.client, props.onError]);
 
   const selectRun = (runId: string) => {
+    if (runId === selectedId) return;
     setSelectedId(runId);
     setTradePage(0);
     setLoading(true);
     props.onSelectRun?.(runId);
-    void refreshSelected(runId, 0)
-      .catch((caught: unknown) => props.onError(messageFor(caught)))
-      .finally(() => setLoading(false));
   };
 
   const toggleCompare = (run: BacktestRun) => {
@@ -144,10 +178,10 @@ export function BacktestsWorkspace(props: {
   };
 
   const cancel = async () => {
-    if (!envelope || !ACTIVE_STATUSES.has(envelope.run.status)) return;
+    if (!activeRun || !ACTIVE_STATUSES.has(activeRun.status)) return;
     setActing(true);
     try {
-      const updated = await props.client.cancel(envelope.run.runId);
+      const updated = await props.client.cancel(activeRun.runId);
       setEnvelope(updated);
       await refresh();
       props.onNotice(updated.run.status === "cancelled" ? "Backtest cancelled." : "Cancellation requested.");
@@ -159,10 +193,10 @@ export function BacktestsWorkspace(props: {
   };
 
   const duplicate = async () => {
-    if (!envelope) return;
+    if (!activeRun) return;
     setActing(true);
     try {
-      const created = await props.client.create(envelope.run.marketId, envelope.run.config);
+      const created = await props.client.create(activeRun.marketId, activeRun.config);
       setSelectedId(created.run.runId);
       setEnvelope(created);
       await refresh();
@@ -175,20 +209,17 @@ export function BacktestsWorkspace(props: {
   };
 
   const remove = async () => {
-    if (!envelope || ACTIVE_STATUSES.has(envelope.run.status)) return;
+    if (!activeRun || ACTIVE_STATUSES.has(activeRun.status)) return;
     if (!window.confirm("Delete this terminal backtest and its saved data?")) return;
     setActing(true);
     try {
-      await props.client.delete(envelope.run.runId);
+      await props.client.delete(activeRun.runId);
       const remaining = await refresh();
-      const next = remaining.find((run) => run.runId !== envelope.run.runId);
+      const next = remaining.find((run) => run.runId !== activeRun.runId);
       setSelectedId(next?.runId);
       setEnvelope(null);
-      setTrades([]);
-      setChartTrades([]);
-      setTradeTotal(0);
-      setSeries([]);
-      setCompareIds((current) => current.filter((id) => id !== envelope.run.runId));
+      setDetails(null);
+      setCompareIds((current) => current.filter((id) => id !== activeRun.runId));
       props.onNotice("Backtest deleted.");
     } catch (caught) {
       props.onError(messageFor(caught));
@@ -266,34 +297,31 @@ export function BacktestsWorkspace(props: {
         </aside>
 
         <section className="backtest-stage" aria-live="polite">
-          {loading && !envelope ? <LoadingTape /> : envelope ? (
+          {activeRun ? (
             <>
               <RunHeader
-                envelope={envelope}
+                run={activeRun}
                 acting={acting}
                 onCancel={() => void cancel()}
                 onDelete={() => void remove()}
                 onDuplicate={() => void duplicate()}
               />
-              {ACTIVE_STATUSES.has(envelope.run.status) && <RunProgress run={envelope.run} />}
-              {envelope.run.status === "failed" && <RunFailure run={envelope.run} />}
-              {envelope.run.status === "cancelled" && (
+              {ACTIVE_STATUSES.has(activeRun.status) && <RunProgress run={activeRun} />}
+              {activeRun.status === "failed" && <RunFailure run={activeRun} />}
+              {activeRun.status === "cancelled" && (
                 <div className="terminal-note"><X aria-hidden="true" /><span><strong>Replay cancelled</strong>No results were saved for this run.</span></div>
               )}
-              {envelope.run.status === "completed" && envelope.result && (
+              {activeRun.status === "completed" && (
                 <CompletedRun
-                  envelope={envelope}
-                  series={series}
-                  trades={trades}
-                  chartTrades={chartTrades}
+                  result={activeResult}
+                  details={activeDetails}
                   tradePage={tradePage}
-                  tradeTotal={tradeTotal}
                   onTradePage={setTradePage}
                 />
               )}
-              <ConfigurationStrip run={envelope.run} />
+              <ConfigurationStrip run={activeRun} />
             </>
-          ) : (
+          ) : loading ? <LoadingTape /> : (
             <div className="stage-empty"><Activity aria-hidden="true" /><h2>Select a replay tape</h2><p>Choose a recent run to inspect its assumptions, fills, and result.</p></div>
           )}
         </section>
@@ -305,13 +333,13 @@ export function BacktestsWorkspace(props: {
 }
 
 function RunHeader(props: {
-  envelope: BacktestRunEnvelope;
+  run: BacktestRun;
   acting: boolean;
   onCancel: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
 }) {
-  const { run } = props.envelope;
+  const { run } = props;
   return (
     <header className="run-header">
       <div>
@@ -366,16 +394,24 @@ function RunFailure({ run }: { run: BacktestRun }) {
   );
 }
 
-function CompletedRun({ envelope, series, trades, chartTrades, tradePage, tradeTotal, onTradePage }: {
-  envelope: BacktestRunEnvelope;
-  series: BacktestSeriesPoint[];
-  trades: BacktestTrade[];
-  chartTrades: BacktestTrade[];
+function CompletedRun({ result, details, tradePage, onTradePage }: {
+  result: BacktestResult | null;
+  details: RunDetails | null;
   tradePage: number;
-  tradeTotal: number;
   onTradePage: (page: number) => void;
 }) {
-  const result = envelope.result!;
+  if (!result) {
+    return (
+      <>
+        <MetricRibbonPlaceholder />
+        <LoadingPanel title="Loading the replay chart" detail="Prices, executions, and equity on one clock." />
+        <div className="result-lower-grid">
+          <LoadingPanel title="Loading the trade ledger" detail="Every modeled fill for this run." />
+          <LoadingPanel title="Loading benchmarks" detail="Buy-and-hold context for this market." />
+        </div>
+      </>
+    );
+  }
   const metrics = result.metrics;
   return (
     <>
@@ -387,9 +423,13 @@ function CompletedRun({ envelope, series, trades, chartTrades, tradePage, tradeT
         <ResultMetric label="Win rate" value={percent(metrics.winRatePct)} />
         <ResultMetric label="Fees" value={money(metrics.fees)} />
       </section>
-      <ReplayTape points={series} trades={chartTrades} tradeTotal={tradeTotal} />
+      {details
+        ? <ReplayTape points={details.series} trades={details.chartTrades} tradeTotal={details.tradeTotal} />
+        : <LoadingPanel title="Loading the replay chart" detail="Prices, executions, and equity on one clock." />}
       <div className="result-lower-grid">
-        <TradeLedger trades={trades} page={tradePage} total={tradeTotal} onPage={onTradePage} />
+        {details
+          ? <TradeLedger trades={details.trades} page={tradePage} total={details.tradeTotal} onPage={onTradePage} />
+          : <LoadingPanel title="Loading the trade ledger" detail="Every modeled fill for this run." />}
         <aside className="benchmark-card">
           <span className="eyebrow">Context, not a target</span>
           <h3>Buy-and-hold benchmarks</h3>
@@ -520,8 +560,30 @@ function ComparisonPanel({ envelopes, onClose }: { envelopes: BacktestRunEnvelop
   );
 }
 
+function LoadingPanel({ title, detail }: { title: string; detail: string }) {
+  return (
+    <section className="loading-panel">
+      <RotateCcw aria-hidden="true" />
+      <span><strong>{title}</strong>{detail}</span>
+    </section>
+  );
+}
+
+function MetricRibbonPlaceholder() {
+  return (
+    <section className="metric-ribbon metric-ribbon-placeholder" aria-label="Loading backtest summary">
+      {["Final equity", "Return", "Max drawdown", "Trades", "Win rate", "Fees"].map((label) => (
+        <div className="result-metric" key={label}>
+          <span>{label}</span>
+          <strong className="value-placeholder" aria-hidden="true" />
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function LoadingTape() {
-  return <div className="loading-tape"><RotateCcw aria-hidden="true" /><span><strong>Loading replay tape</strong>Reading PostgreSQL-backed run state…</span></div>;
+  return <div className="loading-tape"><RotateCcw aria-hidden="true" /><span><strong>Loading your backtests</strong>Fetching the most recent runs.</span></div>;
 }
 
 function chartGeometry(points: BacktestSeriesPoint[]) {
