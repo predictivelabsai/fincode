@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { listAgentThreads, runAgentTurn } from "./agent";
+import { AgentApiError, listAgentThreads, runAgentTurn } from "./agent";
 
 const THREAD_ID = "11111111-1111-4111-8111-111111111111";
 const REPLACEMENT_THREAD_ID = "22222222-2222-4222-8222-222222222222";
@@ -52,9 +52,9 @@ describe("runAgentTurn", () => {
     }] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(listAgentThreads("https://agent.polytrade.test/", async () => "browser-jwt", 20, 10))
+    await expect(listAgentThreads("https://api.polytrade.test/", async () => "browser-jwt", 20, 10))
       .resolves.toEqual([expect.objectContaining({ title: "Election liquidity" })]);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://agent.polytrade.test/v1/agent/threads?limit=20&offset=10");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.polytrade.test/v1/agent/threads?limit=20&offset=10");
   });
 
   it("creates a thread and consumes typed public SSE events", async () => {
@@ -80,7 +80,7 @@ describe("runAgentTurn", () => {
     const backtests: unknown[] = [];
 
     await runAgentTurn({
-      apiUrl: "https://agent.polytrade.test/",
+      apiUrl: "https://api.polytrade.test/",
       getToken: async () => "browser-jwt",
       text: "Find a market",
       handlers: {
@@ -105,7 +105,7 @@ describe("runAgentTurn", () => {
     expect(secondCall).toBeDefined();
     const [url, init] = secondCall!;
     expect(url).toBe(
-      `https://agent.polytrade.test/v1/agent/threads/${THREAD_ID}/runs/stream`,
+      `https://api.polytrade.test/v1/agent/threads/${THREAD_ID}/runs/stream`,
     );
     expect(init?.credentials).toBe("omit");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer browser-jwt");
@@ -132,7 +132,7 @@ describe("runAgentTurn", () => {
     const threadIds: string[] = [];
 
     await runAgentTurn({
-      apiUrl: "https://agent.polytrade.test",
+      apiUrl: "https://api.polytrade.test",
       getToken: async () => "browser-jwt",
       threadId: THREAD_ID,
       text: "Resume",
@@ -149,5 +149,21 @@ describe("runAgentTurn", () => {
     const retryCall = fetchMock.mock.calls[2];
     expect(retryCall).toBeDefined();
     expect(retryCall![0]).toContain(REPLACEMENT_THREAD_ID);
+  });
+
+  it("surfaces a sanitized gateway proxy failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json(
+          { error: { code: "UPSTREAM_UNAVAILABLE", message: "Agent service is unavailable" } },
+          { status: 502 },
+        ),
+      ),
+    );
+
+    await expect(
+      listAgentThreads("https://api.polytrade.test", async () => "browser-jwt"),
+    ).rejects.toEqual(new AgentApiError("Agent service is unavailable", 502));
   });
 });

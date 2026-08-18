@@ -300,8 +300,13 @@ async function agentFetch(
 
 async function responseError(response: Response): Promise<string> {
   try {
-    const payload = (await response.json()) as { detail?: unknown };
-    return typeof payload.detail === "string" ? payload.detail : `Agent request failed (${response.status})`;
+    const payload = (await response.json()) as {
+      detail?: unknown;
+      error?: { message?: unknown };
+    };
+    if (typeof payload.detail === "string") return payload.detail;
+    if (typeof payload.error?.message === "string") return payload.error.message;
+    return `Agent request failed (${response.status})`;
   } catch {
     return `Agent request failed (${response.status})`;
   }

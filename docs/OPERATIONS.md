@@ -3,10 +3,18 @@
 ## Deployment order
 
 Provision the remote PostgreSQL database before deploying the root Compose
-project as one always-on application. Assign HTTPS domains to `web`, `gateway`,
-`agent`, and `backtest-api`; keep Redis and `backtest-worker` private. Configure
-the matching public Vite URLs and list the exact browser origins in
-`CORS_ORIGINS`.
+project as one always-on application. Assign HTTPS domains only to `web` and
+`gateway`; keep Redis, `agent`, `backtest-api`, and `backtest-worker` private.
+Set `VITE_API_URL` to the gateway's public HTTPS origin and list the exact
+browser origins in `CORS_ORIGINS`. For the standard deployment, set
+`VITE_API_URL=https://api.polytrade.com` and
+`CORS_ORIGINS=https://app.polytrade.com`; no additional DNS names are required.
+
+The gateway preserves `/v1/agent` while forwarding it to `http://agent:8000`
+and preserves `/v1/backtests` while forwarding it to
+`http://backtest-api:8100`. Its default 60-second proxy inactivity timeout is
+longer than the agent's 15-second SSE heartbeat. Keep any external reverse
+proxy from buffering `text/event-stream` responses.
 
 Clerk configuration is required for the standalone PolyTrade web application.
 AssetHero API access is optional: set `ASSETHERO_API_ISSUER` and
@@ -20,7 +28,7 @@ Compose starts components in this order:
 2. The gateway connects through `DATABASE_URL`, runs the idempotent schema
    bootstrap, and passes health.
 3. The backtest API, workers, and agent start with the same `DATABASE_URL`.
-4. The web application starts after all public APIs are ready.
+4. The web application starts after the gateway and both private APIs are ready.
 
 The gateway also owns the persistent paper-strategy runner. Keep at least one
 gateway replica running for due scans to execute. Multiple replicas are safe:

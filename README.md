@@ -15,9 +15,9 @@ code.
 
 ```mermaid
 flowchart LR
-    UI["React workspace"] -->|"research JWT"| AG["Agent API"]
-    UI -->|"reviewed actions"| GW["Gateway"]
-    UI -->|"run polling"| BA["Backtest API"]
+    UI["React workspace"] -->|"one HTTPS API origin"| GW["Gateway"]
+    GW -->|"/v1/agent proxy"| AG["Agent API"]
+    GW -->|"/v1/backtests proxy"| BA["Backtest API"]
     AG -->|"resolved search"| GW
     AG -->|"run ID + exact config"| BA
     BA -->|"transactional outbox"| PG[("One PostgreSQL database")]
@@ -29,10 +29,12 @@ flowchart LR
     AG --> PG
     GW --> PM["Polymarket public + trading APIs"]
     BW --> PH["Public Gamma + CLOB history APIs"]
-    AH["AssetHero application"] -.->|"optional scoped API JWT"| AG
-    AH -.->|"optional scoped API JWT"| GW
-    AH -.->|"optional scoped API JWT"| BA
+    AH["AssetHero application"] -.->|"optional scoped API JWT"| GW
 ```
+
+The gateway is the only public API origin. It streams agent responses and
+forwards backtest control requests over the private Compose network; agent and
+backtest services still authenticate every forwarded bearer token themselves.
 
 The standalone web application always uses PolyTrade's Clerk instance.
 AssetHero is an optional external API client with its own issuer and JWKS; it is
@@ -66,7 +68,7 @@ tables.
 
 PolyTrade always uses an existing remote PostgreSQL 16+ database, including
 when the application is run locally. Local tooling requires Python 3.12, uv,
-Node 20+, pnpm 10, Redis 7+, and Docker Compose for the container stack.
+Node 20.18.1+, pnpm 10, Redis 7+, and Docker Compose for the container stack.
 
 ```bash
 cp .env.example .env

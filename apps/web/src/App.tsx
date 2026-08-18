@@ -73,11 +73,11 @@ const STARTER_QUESTIONS = [
 export default function App() {
   const authentication = useAuthentication();
   const gateway = useMemo(
-    () => new GatewayClient(env.VITE_GATEWAY_URL, authentication.getToken),
+    () => new GatewayClient(env.VITE_API_URL, authentication.getToken),
     [authentication.getToken],
   );
   const backtests = useMemo(
-    () => new BacktestClient(env.VITE_BACKTEST_URL, authentication.getToken),
+    () => new BacktestClient(env.VITE_API_URL, authentication.getToken),
     [authentication.getToken],
   );
   const [messages, setMessages] = useState<DeskMessage[]>([
@@ -128,7 +128,7 @@ export default function App() {
     if (!savedThreadId) return;
     let cancelled = false;
     void getAgentThreadItems(
-      env.VITE_AGENT_URL,
+      env.VITE_API_URL,
       authentication.getToken,
       savedThreadId,
     ).then((items) => {
@@ -188,7 +188,7 @@ export default function App() {
     setFlowStage("research");
     try {
       await runAgentTurn({
-        apiUrl: env.VITE_AGENT_URL,
+        apiUrl: env.VITE_API_URL,
         getToken: authentication.getToken,
         threadId,
         text,

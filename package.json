@@ -3,7 +3,7 @@
   "version": "4.0.0",
   "private": true,
   "packageManager": "pnpm@10.32.1",
-  "engines": { "node": ">=20.10" },
+  "engines": { "node": ">=20.18.1" },
   "pnpm": {
     "overrides": {
       "ws": "8.21.1"

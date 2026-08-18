@@ -22,9 +22,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env:
-          VITE_AGENT_URL: https://agent.polytrade.test
-          VITE_BACKTEST_URL: https://backtest.polytrade.test
-          VITE_GATEWAY_URL: https://api.polytrade.test
+          VITE_API_URL: https://api.polytrade.test
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_polytrade
       - run: pnpm audit --prod --audit-level high
 
@@ -88,9 +86,7 @@ jobs:
       CORS_ORIGINS: https://polytrade.test,https://assethero.test
       CLERK_ISSUER: https://clerk.test
       CLERK_JWKS_URL: https://clerk.test/.well-known/jwks.json
-      VITE_AGENT_URL: https://agent.polytrade.test
-      VITE_BACKTEST_URL: https://backtest.polytrade.test
-      VITE_GATEWAY_URL: https://api.polytrade.test
+      VITE_API_URL: https://api.polytrade.test
       VITE_CLERK_PUBLISHABLE_KEY: pk_test_polytrade
     steps:
       - uses: actions/checkout@v4
@@ -98,4 +94,5 @@ jobs:
         run: |
           docker compose config --quiet
           ! docker compose config --services | grep -qx postgres
+          docker compose config --format json | python -c 'import json, sys; services = json.load(sys.stdin)["services"]; assert "ports" not in services["agent"] and "ports" not in services["backtest-api"]'
       - run: docker compose build agent backtest-api backtest-worker gateway web

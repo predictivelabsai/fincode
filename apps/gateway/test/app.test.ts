@@ -1,3 +1,5 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -12,7 +14,46 @@ const principal: Principal = {
   scopes: new Set(["research", "trade"]),
 };
 
-function config(trustedProxies = "127.0.0.1/32,::1/128") {
+async function requestBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function startUpstream(
+  handler: (request: IncomingMessage, response: ServerResponse) => Promise<void> | void,
+) {
+  const server = createServer((request, response) => {
+    void Promise.resolve(handler(request, response)).catch(() => {
+      if (!response.headersSent) response.statusCode = 500;
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    },
+  };
+}
+
+function config(
+  trustedProxies = "127.0.0.1/32,::1/128",
+  overrides: NodeJS.ProcessEnv = {},
+) {
   return parseConfig({
     NODE_ENV: "test",
     DATABASE_URL: "postgresql://test:test@db.example.test:5432/polytrade?sslmode=require",
@@ -21,10 +62,11 @@ function config(trustedProxies = "127.0.0.1/32,::1/128") {
     TRUSTED_PROXIES: trustedProxies,
     CLERK_ISSUER: "https://clerk.test",
     CLERK_JWKS_URL: "https://clerk.test/jwks",
+    ...overrides,
   });
 }
 
-async function setup(trustedProxies?: string) {
+async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv = {}) {
   const store = new MemoryTradingStore();
   const polymarket = new FakePolymarket();
   let challengeCalls = 0;
@@ -142,7 +184,7 @@ async function setup(trustedProxies?: string) {
     stop: async () => emptyPaperStrategy,
   };
   const app = await buildApp({
-    config: config(trustedProxies),
+    config: config(trustedProxies, configOverrides),
     verifier: { verifyAuthorization: async (_header: string | undefined, scope: string) => {
       verifiedScopes.push(scope);
       return principal;
@@ -364,5 +406,219 @@ describe("gateway HTTP boundary", () => {
       { intentId: "00000000-0000-4000-8000-000000000002", signature: "0x22" },
     ]);
     await app.close();
+  });
+
+  it("proxies agent and backtest requests without changing their HTTP contracts", async () => {
+    const observed: Array<{
+      body: string;
+      headers: IncomingMessage["headers"];
+      method: string | undefined;
+      url: string | undefined;
+    }> = [];
+    const handler = async (request: IncomingMessage, response: ServerResponse) => {
+      observed.push({
+        body: await requestBody(request),
+        headers: request.headers,
+        method: request.method,
+        url: request.url,
+      });
+      const url = new URL(request.url ?? "/", "http://upstream.test");
+      const requestedStatus = Number(url.searchParams.get("status") ?? 0);
+      response.setHeader("Access-Control-Allow-Origin", "https://wrong-upstream-origin.test");
+      if (request.method === "DELETE") {
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+      response.statusCode = requestedStatus || (request.method === "POST" ? 202 : 200);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ method: request.method, path: request.url }));
+    };
+    const agent = await startUpstream(handler);
+    const backtest = await startUpstream(handler);
+    const { app } = await setup(undefined, {
+      AGENT_UPSTREAM_URL: agent.origin,
+      BACKTEST_UPSTREAM_URL: backtest.origin,
+    });
+
+    try {
+      const agentResponse = await app.inject({
+        method: "POST",
+        url: "/v1/agent/threads?status=418&offset=10",
+        headers: {
+          accept: "application/json",
+          authorization: "Bearer agent-token",
+          "content-type": "application/json",
+          "idempotency-key": "agent-request-key",
+          origin: "https://polytrade.test",
+        },
+        payload: { message: "hello" },
+      });
+      expect(agentResponse.statusCode).toBe(418);
+      expect(agentResponse.json()).toEqual({
+        method: "POST",
+        path: "/v1/agent/threads?status=418&offset=10",
+      });
+      expect(agentResponse.headers["access-control-allow-origin"]).toBe("https://polytrade.test");
+      expect(observed[0]).toMatchObject({
+        body: '{"message":"hello"}',
+        method: "POST",
+        url: "/v1/agent/threads?status=418&offset=10",
+      });
+      expect(observed[0]?.headers).toMatchObject({
+        accept: "application/json",
+        authorization: "Bearer agent-token",
+        "content-type": "application/json",
+        "idempotency-key": "agent-request-key",
+      });
+      expect(observed[0]?.headers.origin).toBeUndefined();
+
+      const requestsBeforePreflight = observed.length;
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: "/v1/backtests",
+        headers: {
+          origin: "https://polytrade.test",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "authorization,idempotency-key,content-type",
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers["access-control-allow-origin"]).toBe("https://polytrade.test");
+      expect(preflight.headers["access-control-allow-methods"]).toContain("POST");
+      expect(observed).toHaveLength(requestsBeforePreflight);
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/backtests?source=web",
+        headers: {
+          authorization: "Bearer backtest-token",
+          "content-type": "application/json",
+          "idempotency-key": "backtest-request-key",
+        },
+        payload: { marketId: "market-1" },
+      });
+      expect(created.statusCode).toBe(202);
+      expect(created.json()).toEqual({ method: "POST", path: "/v1/backtests?source=web" });
+      expect(observed[1]).toMatchObject({
+        body: '{"marketId":"market-1"}',
+        method: "POST",
+        url: "/v1/backtests?source=web",
+      });
+      expect(observed[1]?.headers).toMatchObject({
+        authorization: "Bearer backtest-token",
+        "idempotency-key": "backtest-request-key",
+      });
+
+      const failed = await app.inject({
+        method: "GET",
+        url: "/v1/backtests/run-1?status=503",
+      });
+      expect(failed.statusCode).toBe(503);
+      expect(failed.json()).toEqual({
+        method: "GET",
+        path: "/v1/backtests/run-1?status=503",
+      });
+
+      const deleted = await app.inject({ method: "DELETE", url: "/v1/backtests/run-1" });
+      expect(deleted.statusCode).toBe(204);
+      expect(deleted.payload).toBe("");
+    } finally {
+      await app.close();
+      await Promise.all([agent.close(), backtest.close()]);
+    }
+  });
+
+  it("returns sanitized gateway errors when an upstream is unavailable or times out", async () => {
+    const stalled = await startUpstream(() => undefined);
+    const unavailable = await setup(undefined, {
+      AGENT_UPSTREAM_URL: "http://127.0.0.1:1",
+      BACKTEST_UPSTREAM_URL: stalled.origin,
+      UPSTREAM_PROXY_TIMEOUT_MS: "100",
+    });
+
+    try {
+      const missing = await unavailable.app.inject({ method: "GET", url: "/v1/agent/threads" });
+      expect(missing.statusCode).toBe(502);
+      expect(missing.json()).toEqual({
+        error: {
+          code: "UPSTREAM_UNAVAILABLE",
+          message: "Agent service is unavailable",
+        },
+      });
+      expect(missing.payload).not.toContain("127.0.0.1");
+
+      const timedOut = await unavailable.app.inject({ method: "GET", url: "/v1/backtests" });
+      expect(timedOut.statusCode).toBe(504);
+      expect(timedOut.json()).toEqual({
+        error: {
+          code: "UPSTREAM_TIMEOUT",
+          message: "Backtest service timed out",
+        },
+      });
+    } finally {
+      await unavailable.app.close();
+      await stalled.close();
+    }
+  });
+
+  it("streams agent SSE events through the gateway without buffering", async () => {
+    let releaseStream: () => void = () => undefined;
+    const continueStream = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    const agent = await startUpstream(async (request, response) => {
+      await requestBody(request);
+      response.writeHead(200, {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/event-stream",
+        "X-Accel-Buffering": "no",
+      });
+      response.flushHeaders();
+      response.write("event: run.started\ndata: {}\n\n");
+      await continueStream;
+      response.end("event: run.completed\ndata: {}\n\n");
+    });
+    const { app } = await setup(undefined, {
+      AGENT_UPSTREAM_URL: agent.origin,
+      UPSTREAM_PROXY_TIMEOUT_MS: "1000",
+    });
+
+    try {
+      const gatewayOrigin = await app.listen({ host: "127.0.0.1", port: 0 });
+      const response = await fetch(`${gatewayOrigin}/v1/agent/threads/thread-1/runs/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://polytrade.test",
+        },
+        body: JSON.stringify({ message: "stream" }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-accel-buffering")).toBe("no");
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://polytrade.test");
+
+      const reader = response.body?.getReader();
+      expect(reader).toBeDefined();
+      const first = await reader!.read();
+      const firstText = new TextDecoder().decode(first.value);
+      expect(firstText).toContain("event: run.started");
+      expect(firstText).not.toContain("event: run.completed");
+
+      releaseStream();
+      let remainder = "";
+      while (true) {
+        const chunk = await reader!.read();
+        if (chunk.done) break;
+        remainder += new TextDecoder().decode(chunk.value);
+      }
+      expect(remainder).toContain("event: run.completed");
+    } finally {
+      releaseStream();
+      await app.close();
+      await agent.close();
+    }
   });
 });

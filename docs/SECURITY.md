@@ -11,6 +11,12 @@ retain their stronger trading and wallet requirements. Every backtest lookup
 includes the canonical namespaced principal, so a foreign UUID and an unknown
 UUID both return `404`.
 
+The gateway is the only public API service. Its agent and backtest proxies
+forward bearer tokens over the private Compose network, leave authorization to
+the owning upstream, stream SSE without buffering, and replace transport errors
+with sanitized `502` or `504` responses. Agent and backtest container ports are
+not published on the host.
+
 Creation and cancellation require idempotency keys. PostgreSQL enforces one
 queued/running run per principal, and a task UUID is atomically claimed before
 work begins. Public failures contain stable codes and safe messages rather than
@@ -62,5 +68,7 @@ absence of application tables in `public`, and one `current_database()` across
 service pools. Tests cover deterministic signals and fills, fees, slippage,
 sizing, exits, settlement, stale observations, owner isolation, idempotency,
 dataset reuse, cancellation, public errors, typed events, and Redis publish
-failure. All upstream history and trading interactions are mocked; CI never
+failure. Gateway tests also cover proxy path and header preservation, upstream
+failures, CORS ownership, and incremental SSE delivery. All upstream history
+and trading interactions are mocked; CI never
 requires a wallet or contacts a live trading endpoint.

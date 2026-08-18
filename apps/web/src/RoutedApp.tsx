@@ -178,11 +178,11 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const gateway = useMemo(
-    () => new GatewayClient(env.VITE_GATEWAY_URL, authentication.getToken),
+    () => new GatewayClient(env.VITE_API_URL, authentication.getToken),
     [authentication.getToken],
   );
   const backtests = useMemo(
-    () => new BacktestClient(env.VITE_BACKTEST_URL, authentication.getToken),
+    () => new BacktestClient(env.VITE_API_URL, authentication.getToken),
     [authentication.getToken],
   );
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
@@ -227,7 +227,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const refreshThreads = useCallback(async () => {
     try {
-      const next = await listAgentThreads(env.VITE_AGENT_URL, authentication.getToken);
+      const next = await listAgentThreads(env.VITE_API_URL, authentication.getToken);
       setThreads(next);
       return next;
     } catch (caught) {
@@ -313,7 +313,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       return { ...current, [threadId]: { ...existing, loading: true } };
     });
     try {
-      const items = await getAgentThreadItems(env.VITE_AGENT_URL, authentication.getToken, threadId);
+      const items = await getAgentThreadItems(env.VITE_API_URL, authentication.getToken, threadId);
       const messages = items
         .filter((item) => item.kind === "message")
         .map((item) => ({ id: item.id, role: item.role, text: item.text } satisfies DeskMessage));
@@ -363,7 +363,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     let threadId = requestedThreadId;
     try {
       if (!threadId) {
-        threadId = await createAgentThread(env.VITE_AGENT_URL, authentication.getToken);
+        threadId = await createAgentThread(env.VITE_API_URL, authentication.getToken);
         navigate(`/chat/${threadId}`, { replace: true });
       }
       let targetThreadId = threadId;
@@ -382,7 +382,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
         };
       });
       await runAgentTurn({
-        apiUrl: env.VITE_AGENT_URL,
+        apiUrl: env.VITE_API_URL,
         getToken: authentication.getToken,
         threadId: targetThreadId,
         text: message,
@@ -460,7 +460,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      await deleteAgentThread(env.VITE_AGENT_URL, authentication.getToken, threadId);
+      await deleteAgentThread(env.VITE_API_URL, authentication.getToken, threadId);
       setChatStates((current) => {
         const { [threadId]: _removed, ...rest } = current;
         return rest;

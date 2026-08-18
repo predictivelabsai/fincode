@@ -4,7 +4,8 @@ PolyTrade is a standalone Clerk application. AssetHero is a separate application
 that can optionally call PolyTrade's gateway, agent, and backtest APIs using its
 own identity system. AssetHero is not a PolyTrade frontend authentication mode.
 
-Enable the integration by configuring both values on every public PolyTrade API:
+Enable the integration by configuring both values on the gateway, agent,
+backtest API, and worker:
 
 ```env
 ASSETHERO_API_ISSUER=https://<assethero-issuer>
@@ -16,7 +17,8 @@ Leave the issuer and JWKS URL empty to run PolyTrade with Clerk only. Supplying
 only one is a startup error. PolyTrade never receives AssetHero's signing key.
 
 After its normal login, AssetHero obtains a short-lived user JWT for the
-`polytrade` audience and sends it to the selected API:
+`polytrade` audience and sends it to the shared API origin. The gateway forwards
+agent and backtest paths to the service that validates the token:
 
 ```http
 Authorization: Bearer <assethero-user-jwt>

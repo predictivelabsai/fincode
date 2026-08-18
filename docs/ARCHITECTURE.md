@@ -9,6 +9,13 @@ the same externally provisioned PostgreSQL database through the same
 `polytrade`, `polytrade_agent`, and `polytrade_backtest` are namespaces, not
 security boundaries; one application identity intentionally owns all three.
 
+The React client and optional AssetHero caller use one public API origin. The
+gateway serves its native routes and forwards `/v1/agent` to the private agent
+service and `/v1/backtests` to the private backtest control service without
+changing paths or response contracts. Agent SSE bodies remain streaming. The
+proxy does not authenticate on behalf of either upstream; each service verifies
+the forwarded bearer token and required scope.
+
 ## Authentication boundary
 
 PolyTrade's standalone React client always authenticates through PolyTrade's

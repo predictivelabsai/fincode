@@ -33,7 +33,7 @@ describe("BacktestClient", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(envelope));
     vi.stubGlobal("fetch", fetchMock);
     const client = new BacktestClient(
-      "https://backtest.polytrade.test",
+      "https://api.polytrade.test",
       async () => "research-jwt",
     );
 
@@ -42,7 +42,7 @@ describe("BacktestClient", () => {
     expect(created.run.runId).toBe(envelope.run.runId);
     const call = fetchMock.mock.calls[0];
     expect(call).toBeDefined();
-    expect(String(call![0])).toBe("https://backtest.polytrade.test/v1/backtests");
+    expect(String(call![0])).toBe("https://api.polytrade.test/v1/backtests");
     expect(call![1]?.method).toBe("POST");
     const headers = new Headers(call![1]?.headers);
     expect(headers.get("Authorization")).toBe("Bearer research-jwt");
@@ -64,7 +64,7 @@ describe("BacktestClient", () => {
       ),
     );
     const client = new BacktestClient(
-      "https://backtest.polytrade.test",
+      "https://api.polytrade.test",
       async () => "research-jwt",
     );
 

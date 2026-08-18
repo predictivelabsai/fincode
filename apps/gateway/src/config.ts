@@ -9,6 +9,25 @@ const optionalHttpsUrl = z.preprocess(
   httpsUrl.optional(),
 );
 
+const internalHttpOrigin = z.string().url().superRefine((value, context) => {
+  const parsed = new URL(value);
+  if (!new Set(["http:", "https:"]).has(parsed.protocol)) {
+    context.addIssue({ code: "custom", message: "URL must use HTTP or HTTPS" });
+  }
+  if (
+    parsed.username
+    || parsed.password
+    || parsed.pathname !== "/"
+    || parsed.search
+    || parsed.hash
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "URL must be an origin without credentials, path, query, or fragment",
+    });
+  }
+}).transform((value) => value.replace(/\/$/, ""));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
@@ -16,6 +35,9 @@ const envSchema = z.object({
   CREDENTIALS_KEK_BASE64: z.string().min(1),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
   TRUSTED_PROXIES: z.string().default("127.0.0.1/32,::1/128"),
+  AGENT_UPSTREAM_URL: internalHttpOrigin.default("http://localhost:8000"),
+  BACKTEST_UPSTREAM_URL: internalHttpOrigin.default("http://localhost:8100"),
+  UPSTREAM_PROXY_TIMEOUT_MS: z.coerce.number().int().min(100).max(300_000).default(60_000),
   ASSETHERO_API_ISSUER: optionalHttpsUrl,
   ASSETHERO_API_JWKS_URL: optionalHttpsUrl,
   ASSETHERO_API_AUDIENCE: z.literal("polytrade").default("polytrade"),
@@ -38,6 +60,9 @@ export type GatewayConfig = ReturnType<typeof parseConfig>;
 
 export function parseConfig(environment: NodeJS.ProcessEnv) {
   const env = envSchema.parse(environment);
+  if (env.NODE_ENV !== "test" && env.UPSTREAM_PROXY_TIMEOUT_MS < 20_000) {
+    throw new Error("UPSTREAM_PROXY_TIMEOUT_MS must be at least 20000 outside tests");
+  }
   const key = Buffer.from(env.CREDENTIALS_KEK_BASE64, "base64");
   if (key.length !== 32) {
     throw new Error("CREDENTIALS_KEK_BASE64 must decode to exactly 32 bytes");

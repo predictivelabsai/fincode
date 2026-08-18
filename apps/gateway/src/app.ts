@@ -36,6 +36,7 @@ import { AppError, conflict, forbidden, validation } from "./errors.js";
 import type { PaperStrategyService } from "./paper-strategy.js";
 import type { PaperTradingService } from "./paper.js";
 import type { PolymarketPort } from "./polymarket.js";
+import { registerServiceProxies } from "./proxy.js";
 import type { TradingStore } from "./store.js";
 import type { Principal } from "./types.js";
 import type { TradingService } from "./trading.js";
@@ -168,6 +169,8 @@ export async function buildApp(deps: AppDependencies) {
     app.log.error({ err: error }, "request failed");
     return reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
   });
+
+  await registerServiceProxies(app, deps.config);
 
   app.get("/health", { schema: { security: [] } }, async (_request, reply) => {
     try {

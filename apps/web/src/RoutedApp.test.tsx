@@ -47,9 +47,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("./env", () => ({
   env: {
-    VITE_AGENT_URL: "https://agent.test",
-    VITE_BACKTEST_URL: "https://backtest.test",
-    VITE_GATEWAY_URL: "https://gateway.test",
+    VITE_API_URL: "https://api.polytrade.test",
     VITE_CLERK_PUBLISHABLE_KEY: "pk_test",
     VITE_CLERK_JWT_TEMPLATE: "polytrade",
   },
@@ -648,7 +646,7 @@ describe("routed workspace", () => {
     renderRoute(`/chat/${THREAD_A}`);
     const history = await screen.findByRole("complementary", { name: "Chat history" });
     await user.click(within(history).getByRole("button", { name: "Delete Election liquidity" }));
-    await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://agent.test", expect.any(Function), THREAD_A));
+    await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://api.polytrade.test", expect.any(Function), THREAD_A));
     expect(window.confirm).toHaveBeenCalled();
   });
 });

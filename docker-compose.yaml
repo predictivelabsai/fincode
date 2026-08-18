@@ -68,6 +68,9 @@ services:
       CREDENTIALS_KEK_BASE64: ${CREDENTIALS_KEK_BASE64:?CREDENTIALS_KEK_BASE64 is required}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1/32,::1/128}
+      AGENT_UPSTREAM_URL: http://agent:8000
+      BACKTEST_UPSTREAM_URL: http://backtest-api:8100
+      UPSTREAM_PROXY_TIMEOUT_MS: ${UPSTREAM_PROXY_TIMEOUT_MS:-60000}
       ASSETHERO_API_ISSUER: ${ASSETHERO_API_ISSUER:-}
       ASSETHERO_API_JWKS_URL: ${ASSETHERO_API_JWKS_URL:-}
       ASSETHERO_API_AUDIENCE: ${ASSETHERO_API_AUDIENCE:-polytrade}
@@ -97,8 +100,8 @@ services:
       context: .
       dockerfile: services/backtest/Dockerfile
     environment: *backtest-environment
-    ports:
-      - "8100:8100"
+    expose:
+      - "8100"
     depends_on:
       gateway:
         condition: service_healthy
@@ -134,8 +137,8 @@ services:
       context: .
       dockerfile: services/agent/Dockerfile
     environment: *agent-environment
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     depends_on:
       gateway:
         condition: service_healthy
@@ -152,9 +155,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_AGENT_URL: ${VITE_AGENT_URL:?VITE_AGENT_URL is required}
-        VITE_BACKTEST_URL: ${VITE_BACKTEST_URL:?VITE_BACKTEST_URL is required}
-        VITE_GATEWAY_URL: ${VITE_GATEWAY_URL:?VITE_GATEWAY_URL is required}
+        VITE_API_URL: ${VITE_API_URL:?VITE_API_URL is required}
         VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:?VITE_CLERK_PUBLISHABLE_KEY is required}
         VITE_CLERK_JWT_TEMPLATE: ${VITE_CLERK_JWT_TEMPLATE:-polytrade}
     ports:
