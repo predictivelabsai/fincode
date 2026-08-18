@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -10,13 +11,17 @@ from polytrade_backtest.config import get_settings
 from polytrade_backtest.engine import PriceObservation
 from polytrade_backtest.market import MarketSnapshot, build_dataset
 from polytrade_backtest.repository import (
-    ActiveRunExists,
+    ActiveRunLimitReached,
     BacktestNotFound,
     BacktestRepository,
     IdempotencyMismatch,
     request_fingerprint,
 )
-from polytrade_backtest.schemas import MomentumBacktestConfig
+from polytrade_backtest.schemas import (
+    BreakoutBacktestConfig,
+    MeanReversionBacktestConfig,
+    MomentumBacktestConfig,
+)
 
 
 @pytest.mark.asyncio
@@ -24,7 +29,12 @@ async def test_repository_schema_ownership_idempotency_and_dataset_deduplication
     database_url = os.environ.get("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("TEST_DATABASE_URL is not configured")
-    settings = get_settings().model_copy(update={"DATABASE_URL": SecretStr(database_url)})
+    settings = get_settings().model_copy(
+        update={
+            "DATABASE_URL": SecretStr(database_url),
+            "BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER": 3,
+        }
+    )
     repository = await BacktestRepository.open(settings)
     suffix = uuid4().hex
     owner = f"assethero:backtest-{suffix}"
@@ -66,9 +76,30 @@ async def test_repository_schema_ownership_idempotency_and_dataset_deduplication
             await repository.create_run(
                 owner, market_id, config, "create-key-0001", "0" * 64
             )
-        with pytest.raises(ActiveRunExists):
+        mean_reversion, breakout = await asyncio.gather(
+            repository.create_run(
+                owner,
+                market_id,
+                MeanReversionBacktestConfig(),
+                "create-key-0002",
+                request_fingerprint({"marketId": market_id, "strategy": "mean_reversion_v1"}),
+            ),
+            repository.create_run(
+                owner,
+                market_id,
+                BreakoutBacktestConfig(),
+                "create-key-0003",
+                request_fingerprint({"marketId": market_id, "strategy": "breakout_v1"}),
+            ),
+        )
+        assert {mean_reversion.run.config.strategy, breakout.run.config.strategy} == {
+            "mean_reversion_v1",
+            "breakout_v1",
+        }
+        assert await repository.active_run_count(owner) == 3
+        with pytest.raises(ActiveRunLimitReached, match="At most 3"):
             await repository.create_run(
-                owner, market_id, config, "create-key-0002", create_hash
+                owner, market_id, config, "create-key-0004", create_hash
             )
         with pytest.raises(BacktestNotFound):
             await repository.get_run(run_id, other_owner)

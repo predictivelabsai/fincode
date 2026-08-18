@@ -47,14 +47,21 @@ candidates when the request is ambiguous and never invents a condition ID. Once
 the exact market is known, it sends the user's request-scoped research JWT and
 the complete configuration to the backtest API. A successful tool result is
 persisted as a `backtest` thread item and emitted as a typed `backtest.created`
-SSE event. The bearer token is never graph state or checkpoint data.
+SSE event. When the user requests all strategies for one selected market, the
+agent creates one run per strategy and reports every run ID and exact
+configuration. Before a multi-run request it reads the owner's active count and
+limit. A batch that exceeds ten runs or the remaining active capacity is rejected
+before any run in that batch starts, and the agent reports the exact requested and
+available counts. The bearer token is never graph state or checkpoint data.
 
 ## Backtest lifecycle
 
 1. `POST /v1/backtests` validates the research JWT, owner, idempotency key, and
    configuration.
-2. One PostgreSQL transaction inserts the queued run, initial progress, and
-   dispatch-outbox record. One owner may have only one queued/running run.
+2. One PostgreSQL transaction takes a per-owner advisory lock, checks the
+   configured active-run limit, and inserts the queued run, initial progress,
+   and dispatch-outbox record. The default limit is ten queued/running runs per
+   owner, which supports multi-market strategy suites while keeping queue use bounded.
 3. The API's dispatcher publishes the committed run UUID to Celery using the
    UUID as the task ID. No JWT, market configuration, or user data enters Redis.
 4. A worker atomically changes that UUID from queued to running. Duplicate or

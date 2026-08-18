@@ -220,7 +220,9 @@ async def start_polymarket_backtest(
     Search resolved markets first. If multiple candidates match, show them to
     the user and ask which one to use; never guess a condition ID. Momentum buys
     strength, mean reversion buys a discount to the trailing mean, and breakout
-    buys a move above the prior rolling high. Omitted strategy settings use the
+    buys a move above the prior rolling high. Call this tool once per requested
+    strategy; calls for a multi-strategy suite may be issued together only after
+    checking capacity with list_my_backtests. Omitted strategy settings use the
     documented defaults for the selected strategy.
     """
     supplied_strategy_fields = {
@@ -302,9 +304,9 @@ async def start_polymarket_backtest(
 @tool
 async def list_my_backtests(
     runtime: ToolRuntime[AgentRunContext],
-    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+    limit: Annotated[int, Field(ge=1, le=50)] = 50,
 ) -> str:
-    """List the authenticated user's recent backtest runs and progress."""
+    """List recent runs plus the authenticated user's active count and limit."""
     payload = await _backtest_request("/v1/backtests", runtime=runtime, params={"limit": limit})
     return _encoded_tool_result(payload)
 

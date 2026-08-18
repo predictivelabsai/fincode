@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -142,12 +143,12 @@ class FakeGraph:
         *,
         fail: bool = False,
         timeout: bool = False,
-        backtest: bool = False,
+        backtest_count: int = 0,
     ) -> None:
         self.envelope = envelope
         self.fail = fail
         self.timeout = timeout
-        self.backtest = backtest
+        self.backtest_count = backtest_count
         self.call: dict[str, Any] = {}
 
     async def astream(self, input: Any, **kwargs: Any):
@@ -182,23 +183,34 @@ class FakeGraph:
                             tool_call_id="proposal-call",
                             name="propose_trading_action",
                         ),
-                        *(
-                            [
-                                ToolMessage(
-                                    content=(
-                                        '{"kind":"backtest_run","runId":'
-                                        '"11111111-1111-4111-8111-111111111111",'
-                                        '"marketId":"condition","marketQuestion":"Question?",'
-                                        '"status":"queued","phase":"queued","progress":0,'
-                                        '"createdAt":"2026-08-03T00:00:00Z"}'
-                                    ),
-                                    tool_call_id="backtest-call",
-                                    name="start_polymarket_backtest",
-                                )
-                            ]
-                            if self.backtest
-                            else []
-                        ),
+                        *[
+                            ToolMessage(
+                                content=json.dumps(
+                                    {
+                                        "kind": "backtest_run",
+                                        "runId": (
+                                            "11111111-1111-4111-8111-111111111111",
+                                            "22222222-2222-4222-8222-222222222222",
+                                            "33333333-3333-4333-8333-333333333333",
+                                        )[index],
+                                        "marketId": "condition",
+                                        "marketQuestion": "Question?",
+                                        "strategy": (
+                                            "momentum_v1",
+                                            "mean_reversion_v1",
+                                            "breakout_v1",
+                                        )[index],
+                                        "status": "queued",
+                                        "phase": "queued",
+                                        "progress": 0,
+                                        "createdAt": "2026-08-03T00:00:00Z",
+                                    }
+                                ),
+                                tool_call_id=f"backtest-call-{index + 1}",
+                                name="start_polymarket_backtest",
+                            )
+                            for index in range(self.backtest_count)
+                        ],
                     ]
                 }
             },
@@ -254,7 +266,7 @@ def make_client(
     busy: bool = False,
     fail: bool = False,
     timeout: bool = False,
-    backtest: bool = False,
+    backtest_count: int = 0,
 ) -> tuple[httpx.AsyncClient, FakeRepository, FakeGraph, FakeCheckpointer]:
     settings = get_settings()
     principal = AuthenticatedPrincipal(
@@ -264,7 +276,12 @@ def make_client(
         bearer="short-lived-browser-token",
     )
     repository = FakeRepository(principal.identity, busy=busy)
-    graph = FakeGraph(proposal_envelope, fail=fail, timeout=timeout, backtest=backtest)
+    graph = FakeGraph(
+        proposal_envelope,
+        fail=fail,
+        timeout=timeout,
+        backtest_count=backtest_count,
+    )
     checkpointer = FakeCheckpointer()
     storage = SimpleNamespace(repository=repository, checkpointer=checkpointer)
     application = create_app(settings)
@@ -318,8 +335,10 @@ async def test_stream_emits_only_public_typed_events(proposal_envelope) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_emits_typed_backtest_created_event(proposal_envelope) -> None:
-    client, repository, _graph, _checkpointer = make_client(proposal_envelope, backtest=True)
+async def test_stream_emits_every_typed_backtest_created_event(proposal_envelope) -> None:
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope, backtest_count=3
+    )
     async with client:
         response = await client.post(
             f"/v1/agent/threads/{repository.thread_id}/runs/stream",
@@ -327,8 +346,10 @@ async def test_stream_emits_typed_backtest_created_event(proposal_envelope) -> N
         )
 
     assert response.status_code == 200
-    assert response.text.count("event: backtest.created") == 1
+    assert response.text.count("event: backtest.created") == 3
     assert '"runId":"11111111-1111-4111-8111-111111111111"' in response.text
+    assert '"strategy":"mean_reversion_v1"' in response.text
+    assert '"strategy":"breakout_v1"' in response.text
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accountOverviewSchema,
   backtestConfigSchema,
+  backtestRunListSchema,
   breakoutBacktestConfigSchema,
   defaultBreakoutBacktestConfig,
   defaultMeanReversionBacktestConfig,
@@ -97,6 +98,20 @@ describe("backtest market eligibility", () => {
     expect(isBacktestEligibleMarket({ ...market, closed: false })).toBe(false);
     expect(isBacktestEligibleMarket({ ...market, outcomes: ["A", "B"] })).toBe(false);
     expect(isBacktestEligibleMarket({ ...market, outcomePrices: ["0.5", "0.5"] })).toBe(false);
+  });
+});
+
+describe("backtest capacity contract", () => {
+  it("reports the exact active count and limit", () => {
+    expect(backtestRunListSchema.parse({
+      items: [],
+      activeCount: 4,
+      activeLimit: 10,
+    })).toMatchObject({ activeCount: 4, activeLimit: 10 });
+    expect(() => backtestRunListSchema.parse({
+      items: [],
+      activeCount: 11,
+    })).toThrow();
   });
 });
 

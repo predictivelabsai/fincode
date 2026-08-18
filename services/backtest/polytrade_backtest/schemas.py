@@ -235,6 +235,8 @@ class BacktestRunEnvelope(ContractModel):
 
 class BacktestRunList(ContractModel):
     items: list[BacktestRun]
+    active_count: int = Field(ge=0)
+    active_limit: int = Field(ge=1)
 
 
 class BacktestProgressEvent(ContractModel):

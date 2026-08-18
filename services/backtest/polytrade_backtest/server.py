@@ -15,7 +15,7 @@ from .auth import AuthenticatedPrincipal, TokenVerifier
 from .celery_app import celery_app
 from .config import BacktestSettings, get_settings
 from .repository import (
-    ActiveRunExists,
+    ActiveRunLimitReached,
     BacktestNotFound,
     BacktestRepository,
     IdempotencyMismatch,
@@ -166,10 +166,10 @@ def create_app(settings: BacktestSettings | None = None) -> FastAPI:
             )
         except IdempotencyMismatch as exc:
             raise HTTPException(status_code=409, detail="Idempotency-Key payload mismatch") from exc
-        except ActiveRunExists as exc:
+        except ActiveRunLimitReached as exc:
             raise HTTPException(
                 status_code=409,
-                detail="Finish or cancel the active backtest before starting another",
+                detail=f"At most {exc.limit} backtests can be queued or running at once",
             ) from exc
         if not created.created:
             response.status_code = status.HTTP_200_OK
@@ -183,8 +183,11 @@ def create_app(settings: BacktestSettings | None = None) -> FastAPI:
         principal: Annotated[AuthenticatedPrincipal, Depends(require_principal)],
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> BacktestRunList:
+        services = get_services(request)
         return BacktestRunList(
-            items=await get_services(request).repository.list_runs(principal.identity, limit)
+            items=await services.repository.list_runs(principal.identity, limit),
+            active_count=await services.repository.active_run_count(principal.identity),
+            active_limit=services.settings.BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER,
         )
 
     @application.get("/v1/backtests/{run_id}", response_model=BacktestRunEnvelope)

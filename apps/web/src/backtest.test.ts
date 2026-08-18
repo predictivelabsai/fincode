@@ -29,6 +29,23 @@ afterEach(() => {
 });
 
 describe("BacktestClient", () => {
+  it("parses list capacity metadata while returning the runs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({ items: [envelope.run], activeCount: 1, activeLimit: 10 }),
+      ),
+    );
+    const client = new BacktestClient(
+      "https://api.polytrade.test",
+      async () => "research-jwt",
+    );
+
+    await expect(client.list()).resolves.toEqual([expect.objectContaining({
+      runId: envelope.run.runId,
+    })]);
+  });
+
   it("creates a run with the research JWT and an idempotency key", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(envelope));
     vi.stubGlobal("fetch", fetchMock);

@@ -25,6 +25,14 @@ describe("empty-database bootstrap", () => {
     expect(sql).toMatch(/CHECK \(char_length\(title\) BETWEEN 1 AND 80\)/);
   });
 
+  it("replaces the single-active-backtest index with bounded multi-run support", async () => {
+    const sql = await readFile(schemaPath, "utf8");
+
+    expect(sql).toMatch(/DROP INDEX IF EXISTS polytrade_backtest\.backtest_runs_one_active_owner_idx/);
+    expect(sql).toMatch(/CREATE INDEX IF NOT EXISTS backtest_runs_owner_active_idx/);
+    expect(sql).not.toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS backtest_runs_one_active_owner_idx/);
+  });
+
   it("bootstraps an immutable paper ledger without a reset path", async () => {
     const sql = await readFile(schemaPath, "utf8");
 

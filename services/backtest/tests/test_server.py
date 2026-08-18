@@ -6,7 +6,11 @@ import pytest
 
 from polytrade_backtest.auth import AuthenticatedPrincipal
 from polytrade_backtest.config import get_settings
-from polytrade_backtest.repository import BacktestNotFound, CreateRunResult
+from polytrade_backtest.repository import (
+    ActiveRunLimitReached,
+    BacktestNotFound,
+    CreateRunResult,
+)
 from polytrade_backtest.schemas import BacktestRun, BacktestRunEnvelope, BacktestRunList
 from polytrade_backtest.server import BacktestServices, create_app
 
@@ -52,6 +56,10 @@ class FakeRepository:
         assert principal_id == "assethero:user-1"
         return [self.run] if self.run else []
 
+    async def active_run_count(self, principal_id: str):
+        assert principal_id == "assethero:user-1"
+        return 1 if self.run else 0
+
     async def get_envelope(self, run_id: UUID, principal_id: str):
         if self.run is None or run_id != self.run.run_id or principal_id != "assethero:user-1":
             raise BacktestNotFound
@@ -68,6 +76,11 @@ class FakeRepository:
 
     async def delete_run(self, run_id, principal_id):
         raise BacktestNotFound
+
+
+class LimitedFakeRepository(FakeRepository):
+    async def create_run(self, principal_id, market_id, config, idempotency_key, request_hash):
+        raise ActiveRunLimitReached(10)
 
 
 @pytest.mark.asyncio
@@ -116,6 +129,8 @@ async def test_http_contract_requires_research_auth_and_idempotency() -> None:
             "/v1/backtests", headers={"Authorization": "Bearer valid"}
         )
         assert BacktestRunList.model_validate(listed.json()).items[0].market_id == "condition-1"
+        assert listed.json()["activeCount"] == 1
+        assert listed.json()["activeLimit"] == 10
 
         unknown = await client.get(
             "/v1/backtests/22222222-2222-4222-8222-222222222222",
@@ -123,6 +138,33 @@ async def test_http_contract_requires_research_auth_and_idempotency() -> None:
         )
         assert unknown.status_code == 404
         assert unknown.json() == {"detail": "Backtest not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_reports_the_bounded_active_run_limit() -> None:
+    settings = get_settings()
+    application = create_app(settings)
+    application.state.services = BacktestServices(
+        settings=settings,
+        repository=LimitedFakeRepository(),  # type: ignore[arg-type]
+        verifier=FakeVerifier(),  # type: ignore[arg-type]
+        dispatcher=FakeDispatcher(),  # type: ignore[arg-type]
+    )
+    transport = httpx.ASGITransport(app=application, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="https://backtest.test") as client:
+        response = await client.post(
+            "/v1/backtests",
+            headers={
+                "Authorization": "Bearer valid",
+                "Idempotency-Key": "suite-over-limit",
+            },
+            json={"marketId": "condition-1", "config": {}},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "At most 10 backtests can be queued or running at once"
+    }
 
 
 @pytest.mark.asyncio

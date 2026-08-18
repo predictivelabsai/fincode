@@ -62,7 +62,9 @@ async def test_missing_scope_and_excessive_assethero_lifetime_fail_closed() -> N
 
 
 def test_assethero_api_trust_is_optional_but_requires_a_complete_pair() -> None:
-    values = get_settings().model_dump()
+    settings = get_settings()
+    assert settings.BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER == 10
+    values = settings.model_dump()
     standalone = BacktestSettings.model_validate(
         {
             **values,

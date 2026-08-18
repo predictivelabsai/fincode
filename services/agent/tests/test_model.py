@@ -7,7 +7,8 @@ from polytrade_agent.model import MODEL_ID, REASONING_EFFORT, build_model
 
 
 def test_model_is_fixed_to_maximum_reasoning() -> None:
-    model = build_model(get_settings())
+    settings = get_settings()
+    model = build_model(settings)
     params = model._default_params
 
     assert params["model"] == MODEL_ID
@@ -15,6 +16,7 @@ def test_model_is_fixed_to_maximum_reasoning() -> None:
     assert params["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "temperature" not in params
     assert "top_p" not in params
+    assert settings.BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER == 10
 
 
 def test_langsmith_runtime_is_disabled_and_credentials_fail_closed() -> None:

@@ -389,8 +389,9 @@ CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_runs (
     )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS backtest_runs_one_active_owner_idx
-    ON polytrade_backtest.backtest_runs (principal_id)
+DROP INDEX IF EXISTS polytrade_backtest.backtest_runs_one_active_owner_idx;
+CREATE INDEX IF NOT EXISTS backtest_runs_owner_active_idx
+    ON polytrade_backtest.backtest_runs (principal_id, status)
     WHERE status IN ('queued', 'running');
 CREATE INDEX IF NOT EXISTS backtest_runs_owner_created_idx
     ON polytrade_backtest.backtest_runs (principal_id, created_at DESC);

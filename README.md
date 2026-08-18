@@ -3,7 +3,11 @@
 PolyTrade is a Polymarket research, continuous paper-trading, single-market backtesting,
 and reviewed real-order application. Natural-language chat and the Backtests workspace can find a
 resolved binary market and queue deterministic `momentum_v1`, `mean_reversion_v1`, or
-`breakout_v1` replays with exact parameters. Redis and Celery
+`breakout_v1` replays with exact parameters. A chat request for all strategies
+queues one independently tracked run for each strategy on the selected market.
+Each user may have up to ten queued/running runs; the agent checks capacity and
+asks the user to narrow a larger batch instead of starting only part of it.
+Redis and Celery
 provide the asynchronous work queue; PostgreSQL remains the authoritative source
 for run state, results, and each user's isolated virtual-USDC ledger.
 

@@ -101,7 +101,7 @@ interface ChatState {
   loaded: boolean;
   loading: boolean;
   proposalDraft: ProposalDraft | null;
-  backtest: AgentBacktestReference | null;
+  backtests: AgentBacktestReference[];
 }
 
 interface PendingOrder {
@@ -166,7 +166,7 @@ const emptyChat = (): ChatState => ({
   loaded: false,
   loading: false,
   proposalDraft: null,
-  backtest: null,
+  backtests: [],
 });
 
 export default function RoutedApp() {
@@ -319,7 +319,9 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       const proposal = [...items].reverse().find(
         (item) => item.kind === "proposal" && Date.parse(item.expiresAt) > Date.now(),
       );
-      const backtest = [...items].reverse().find((item) => item.kind === "backtest");
+      const backtests = items
+        .filter((item) => item.kind === "backtest")
+        .map((item) => item.backtest);
       setChatStates((current) => ({
         ...current,
         [threadId]: {
@@ -329,7 +331,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
           proposalDraft: proposal?.kind === "proposal"
             ? { proposal: proposal.proposal, expiresAt: proposal.expiresAt }
             : null,
-          backtest: backtest?.kind === "backtest" ? backtest.backtest : null,
+          backtests,
         },
       }));
       loadedThreadsRef.current.add(threadId);
@@ -438,7 +440,12 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
           onBacktest: (backtestReference) => {
             setChatStates((current) => {
               const state = current[targetThreadId] ?? emptyChat();
-              return { ...current, [targetThreadId]: { ...state, backtest: backtestReference } };
+              const backtests = state.backtests.some(
+                (item) => item.runId === backtestReference.runId,
+              )
+                ? state.backtests
+                : [...state.backtests, backtestReference];
+              return { ...current, [targetThreadId]: { ...state, backtests } };
             });
             setMessage("Backtest queued. Progress is available in activity and Backtests.", "notice");
           },
@@ -938,38 +945,50 @@ const ActivityPane = function ActivityPane(props: {
   visible: boolean;
 }) {
   const workspace = useWorkspace();
-  const state = props.threadId ? workspace.chatStates[props.threadId] ?? emptyChat() : emptyChat();
-  const [run, setRun] = useState<AgentBacktestReference | null>(state.backtest);
+  const fallbackState = useMemo(emptyChat, []);
+  const state = props.threadId ? workspace.chatStates[props.threadId] ?? fallbackState : fallbackState;
+  const [runs, setRuns] = useState<AgentBacktestReference[]>(state.backtests);
   const [pageVisible, setPageVisible] = useState(document.visibilityState === "visible");
 
-  useEffect(() => setRun(state.backtest), [state.backtest]);
+  useEffect(() => setRuns(state.backtests), [state.backtests]);
   useEffect(() => {
     const update = () => setPageVisible(document.visibilityState === "visible");
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
   useEffect(() => {
-    const reference = state.backtest;
-    if (!reference || !props.visible || !pageVisible || !["queued", "running"].includes(reference.status)) return;
+    const activeReferences = state.backtests.filter((reference) =>
+      ["queued", "running"].includes(reference.status),
+    );
+    if (!activeReferences.length || !props.visible || !pageVisible) return;
     let cancelled = false;
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const envelope = await workspace.backtests.get(reference.runId);
+        const envelopes = await Promise.all(
+          activeReferences.map((reference) => workspace.backtests.get(reference.runId)),
+        );
         if (!cancelled) {
-          setRun({
-            kind: "backtest_run",
-            runId: envelope.run.runId,
-            marketId: envelope.run.marketId,
-            marketQuestion: envelope.run.marketQuestion,
-            strategy: envelope.run.config.strategy,
-            status: envelope.run.status,
-            phase: envelope.run.phase,
-            progress: envelope.run.progress,
-            createdAt: envelope.run.createdAt,
-          });
+          const updates = new Map(envelopes.map((envelope) => [envelope.run.runId, envelope]));
+          setRuns((current) => current.map((run) => {
+            const envelope = updates.get(run.runId);
+            return envelope ? {
+              kind: "backtest_run",
+              runId: envelope.run.runId,
+              marketId: envelope.run.marketId,
+              marketQuestion: envelope.run.marketQuestion,
+              strategy: envelope.run.config.strategy,
+              status: envelope.run.status,
+              phase: envelope.run.phase,
+              progress: envelope.run.progress,
+              createdAt: envelope.run.createdAt,
+            } : run;
+          }));
         }
-        if (!cancelled && ["queued", "running"].includes(envelope.run.status)) {
+        if (
+          !cancelled
+          && envelopes.some((envelope) => ["queued", "running"].includes(envelope.run.status))
+        ) {
           timer = window.setTimeout(() => void poll(), 3_000);
         }
       } catch (caught) {
@@ -981,7 +1000,7 @@ const ActivityPane = function ActivityPane(props: {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [pageVisible, props.visible, state.backtest, workspace.backtests, workspace.setMessage]);
+  }, [pageVisible, props.visible, state.backtests, workspace.backtests, workspace.setMessage]);
 
   const proposal = state.proposalDraft;
   const signerReady = Boolean(
@@ -1013,8 +1032,8 @@ const ActivityPane = function ActivityPane(props: {
             />
           </div>
         )}
-        {run && (
-          <div className="activity-item">
+        {runs.map((run) => (
+          <div className="activity-item" key={run.runId}>
             <span className="tape-node" aria-hidden="true" />
             <section className="activity-card">
               <div className="activity-card-heading"><span className={`status-dot status-${run.status}`} /><span>{strategyName(run.strategy)} · {phaseLabel(run.phase)}</span><strong>{run.progress}%</strong></div>
@@ -1023,7 +1042,7 @@ const ActivityPane = function ActivityPane(props: {
               <Link to={`/backtests/${run.runId}`}>Open run <ChevronRight /></Link>
             </section>
           </div>
-        )}
+        ))}
         <div className="activity-item">
           <span className="tape-node" aria-hidden="true" />
           <AccountSummary account={workspace.account} session={workspace.session} onRefresh={() => void workspace.refreshAccount()} />

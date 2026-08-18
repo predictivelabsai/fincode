@@ -44,8 +44,10 @@ class IdempotencyMismatch(ValueError):
     pass
 
 
-class ActiveRunExists(RuntimeError):
-    pass
+class ActiveRunLimitReached(RuntimeError):
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"At most {limit} backtests can be active for one owner")
+        self.limit = limit
 
 
 @dataclass(frozen=True)
@@ -63,8 +65,9 @@ class CreateRunResult:
 
 
 class BacktestRepository:
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: AsyncConnectionPool, max_active_runs_per_owner: int) -> None:
         self.pool = pool
+        self.max_active_runs_per_owner = max_active_runs_per_owner
 
     @classmethod
     async def open(cls, settings: BacktestSettings) -> BacktestRepository:
@@ -82,7 +85,7 @@ class BacktestRepository:
             open=False,
         )
         await pool.open(wait=True, timeout=15)
-        return cls(pool)
+        return cls(pool, settings.BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER)
 
     async def close(self) -> None:
         await self.pool.close()
@@ -120,6 +123,10 @@ class BacktestRepository:
         try:
             async with self.pool.connection() as connection:
                 async with connection.transaction():
+                    await connection.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"backtest-create:{principal_id}",),
+                    )
                     existing = await self._existing_create(
                         connection, principal_id, idempotency_key
                     )
@@ -129,14 +136,16 @@ class BacktestRepository:
                         return CreateRunResult(run=_run_from_row(existing), created=False)
                     cursor = await connection.execute(
                         """
-                        SELECT * FROM polytrade_backtest.backtest_runs
+                        SELECT count(*) AS count FROM polytrade_backtest.backtest_runs
                         WHERE principal_id = %s AND status IN ('queued', 'running')
-                        LIMIT 1
                         """,
                         (principal_id,),
                     )
-                    if await cursor.fetchone() is not None:
-                        raise ActiveRunExists
+                    active = await cursor.fetchone()
+                    if active is None:
+                        raise RuntimeError("Unable to count active backtests")
+                    if active["count"] >= self.max_active_runs_per_owner:
+                        raise ActiveRunLimitReached(self.max_active_runs_per_owner)
                     cursor = await connection.execute(
                         """
                         INSERT INTO polytrade_backtest.backtest_runs (
@@ -185,16 +194,6 @@ class BacktestRepository:
                 if existing["request_hash"] != request_hash:
                     raise IdempotencyMismatch
                 return CreateRunResult(run=_run_from_row(existing), created=False)
-            cursor = await connection.execute(
-                """
-                SELECT 1 FROM polytrade_backtest.backtest_runs
-                WHERE principal_id = %s AND status IN ('queued', 'running')
-                LIMIT 1
-                """,
-                (principal_id,),
-            )
-            if await cursor.fetchone() is not None:
-                raise ActiveRunExists
         raise RuntimeError("Unable to reconcile concurrent backtest creation")
 
     async def _existing_create(
@@ -221,6 +220,21 @@ class BacktestRepository:
                 (principal_id, limit),
             )
             return [_run_from_row(row) for row in await cursor.fetchall()]
+
+    async def active_run_count(self, principal_id: str) -> int:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT count(*) AS count
+                FROM polytrade_backtest.backtest_runs
+                WHERE principal_id = %s AND status IN ('queued', 'running')
+                """,
+                (principal_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Unable to count active backtests")
+            return row["count"]
 
     async def get_run(self, run_id: UUID, principal_id: str) -> BacktestRun:
         row = await self._get_owned_row(run_id, principal_id)

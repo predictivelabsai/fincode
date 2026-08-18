@@ -42,6 +42,7 @@ class AgentSettings(BaseSettings):
     AGENT_MAX_CONCURRENT_RUNS: int = Field(default=8, ge=1, le=100)
     AGENT_MAX_MESSAGE_CHARS: int = Field(default=8_000, ge=1, le=32_000)
     AGENT_THREAD_TTL_DAYS: int = Field(default=30, ge=1, le=365)
+    BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER: int = Field(default=10, ge=3, le=50)
 
     DATABASE_URL: SecretStr
     LANGGRAPH_AES_KEY: SecretStr

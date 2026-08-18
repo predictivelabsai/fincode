@@ -5,6 +5,8 @@ import { AgentApiError, listAgentThreads, runAgentTurn } from "./agent";
 const THREAD_ID = "11111111-1111-4111-8111-111111111111";
 const REPLACEMENT_THREAD_ID = "22222222-2222-4222-8222-222222222222";
 const BACKTEST_ID = "33333333-3333-4333-8333-333333333333";
+const MEAN_REVERSION_BACKTEST_ID = "44444444-4444-4444-8444-444444444444";
+const BREAKOUT_BACKTEST_ID = "55555555-5555-4555-8555-555555555555";
 
 const proposal = {
   action: "create" as const,
@@ -29,6 +31,8 @@ function streamResponse(): Response {
     "event: message.delta\ndata: {\"messageId\":\"assistant-1\",\"textDelta\":\"answer\"}\n\n",
     `event: proposal.created\ndata: ${JSON.stringify({ proposalId: "proposal-1", envelope: { proposal, expiresAt: "2026-08-03T00:02:00.000Z" } })}\n\n`,
     `event: backtest.created\ndata: ${JSON.stringify({ backtestId: "backtest-1", backtest: { kind: "backtest_run", runId: BACKTEST_ID, marketId: "0xcondition", marketQuestion: "Will the typed replay work?", status: "queued", phase: "queued", progress: 0, createdAt: "2026-08-03T00:00:00.000Z" } })}\n\n`,
+    `event: backtest.created\ndata: ${JSON.stringify({ backtestId: "backtest-2", backtest: { kind: "backtest_run", runId: MEAN_REVERSION_BACKTEST_ID, marketId: "0xcondition", marketQuestion: "Will the typed replay work?", strategy: "mean_reversion_v1", status: "queued", phase: "queued", progress: 0, createdAt: "2026-08-03T00:00:00.000Z" } })}\n\n`,
+    `event: backtest.created\ndata: ${JSON.stringify({ backtestId: "backtest-3", backtest: { kind: "backtest_run", runId: BREAKOUT_BACKTEST_ID, marketId: "0xcondition", marketQuestion: "Will the typed replay work?", strategy: "breakout_v1", status: "queued", phase: "queued", progress: 0, createdAt: "2026-08-03T00:00:00.000Z" } })}\n\n`,
     "event: run.completed\ndata: {\"runId\":\"run\"}\n\n",
   ].join("");
   return new Response(body, {
@@ -99,6 +103,8 @@ describe("runAgentTurn", () => {
     ]);
     expect(backtests).toEqual([
       expect.objectContaining({ runId: BACKTEST_ID, status: "queued", strategy: "momentum_v1" }),
+      expect.objectContaining({ runId: MEAN_REVERSION_BACKTEST_ID, status: "queued", strategy: "mean_reversion_v1" }),
+      expect.objectContaining({ runId: BREAKOUT_BACKTEST_ID, status: "queued", strategy: "breakout_v1" }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondCall = fetchMock.mock.calls[1];

@@ -11,6 +11,8 @@ import RoutedApp from "./RoutedApp";
 const THREAD_A = "11111111-1111-4111-8111-111111111111";
 const THREAD_B = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "33333333-3333-4333-8333-333333333333";
+const MEAN_REVERSION_RUN_ID = "88888888-8888-4888-8888-888888888888";
+const BREAKOUT_RUN_ID = "99999999-9999-4999-8999-999999999999";
 const WALLET = "0x0000000000000000000000000000000000000001";
 
 const mocks = vi.hoisted(() => {
@@ -430,7 +432,7 @@ describe("routed workspace", () => {
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toBeEnabled());
   });
 
-  it("orders the right-pane tape as proposal, backtest, account, then status", async () => {
+  it("shows every strategy run and keeps the right-pane tape order", async () => {
     const proposal = {
       action: "create" as const,
       execution: "GTC" as const,
@@ -448,16 +450,22 @@ describe("routed workspace", () => {
     mocks.getAgentThreadItems.mockResolvedValue([
       { kind: "message", id: "message", role: "assistant", text: "Draft ready" },
       { kind: "proposal", id: "proposal", proposal, expiresAt: "2099-08-04T00:02:00.000Z" },
-      { kind: "backtest", id: "backtest", backtest: { kind: "backtest_run", ...run, strategy: run.config.strategy } },
+      { kind: "backtest", id: "momentum-backtest", backtest: { kind: "backtest_run", ...run, strategy: "momentum_v1" } },
+      { kind: "backtest", id: "mean-reversion-backtest", backtest: { kind: "backtest_run", ...run, runId: MEAN_REVERSION_RUN_ID, strategy: "mean_reversion_v1" } },
+      { kind: "backtest", id: "breakout-backtest", backtest: { kind: "backtest_run", ...run, runId: BREAKOUT_RUN_ID, strategy: "breakout_v1" } },
     ]);
     renderRoute(`/chat/${THREAD_A}`);
 
     const proposalHeading = await screen.findByRole("heading", { name: "Will the proposal stay first?" });
-    const backtestHeading = await screen.findByRole("heading", { name: "Will the activity order be clear?" });
+    const backtestHeadings = await screen.findAllByRole("heading", { name: "Will the activity order be clear?" });
+    expect(screen.getByText(/Momentum ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Mean reversion ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Breakout ·/)).toBeInTheDocument();
     const accountHeading = screen.getByText("Account");
     const statusHeading = screen.getByText("Eligibility");
-    expect(proposalHeading.compareDocumentPosition(backtestHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(backtestHeading.compareDocumentPosition(accountHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(backtestHeadings).toHaveLength(3);
+    expect(proposalHeading.compareDocumentPosition(backtestHeadings[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(backtestHeadings[2]!.compareDocumentPosition(accountHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(accountHeading.compareDocumentPosition(statusHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

@@ -617,7 +617,11 @@ export const backtestRunEnvelopeSchema = z.object({
   run: backtestRunSchema,
   result: backtestResultSchema.nullable().optional(),
 });
-export const backtestRunListSchema = z.object({ items: z.array(backtestRunSchema) });
+export const backtestRunListSchema = z.object({
+  items: z.array(backtestRunSchema),
+  activeCount: z.number().int().nonnegative(),
+  activeLimit: z.number().int().positive(),
+});
 export const backtestTradesResponseSchema = z.object({
   runId: z.string().uuid(),
   items: z.array(backtestTradeSchema),
@@ -679,6 +683,7 @@ export type BacktestResult = z.infer<typeof backtestResultSchema>;
 export type BacktestTrade = z.infer<typeof backtestTradeSchema>;
 export type BacktestSeriesPoint = z.infer<typeof backtestSeriesPointSchema>;
 export type BacktestRunEnvelope = z.infer<typeof backtestRunEnvelopeSchema>;
+export type BacktestRunList = z.infer<typeof backtestRunListSchema>;
 export type BacktestTradesResponse = z.infer<typeof backtestTradesResponseSchema>;
 export type BacktestSeriesResponse = z.infer<typeof backtestSeriesResponseSchema>;
 
