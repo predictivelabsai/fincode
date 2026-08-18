@@ -547,7 +547,7 @@ p {
 
 .conversation-toolbar > div {
   min-width: 0;
-  text-align: center;
+  text-align: left;
 }
 
 .conversation-toolbar h1 {
