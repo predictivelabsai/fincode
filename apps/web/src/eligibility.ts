@@ -12,9 +12,8 @@ export interface Eligibility {
 
 const geoblockResponseSchema = z.object({
   blocked: z.boolean(),
-  ip: z.string().trim().min(1).max(45),
-  country: z.string().trim().regex(/^[A-Za-z0-9]{2}$/),
-  region: z.string().trim().max(16),
+  country: z.string().trim().regex(/^[A-Za-z]{2}$/),
+  region: z.string().trim().max(16).nullish().transform((value) => value ?? ""),
 });
 
 function unverifiedEligibility(): Eligibility {
@@ -34,10 +33,7 @@ export async function checkBrowserEligibility(
   const timeout = globalThis.setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await request(POLYMARKET_BROWSER_GEOBLOCK_URL, {
-      method: "GET",
-      headers: { Accept: "application/json" },
       credentials: "omit",
-      cache: "no-store",
       signal: controller.signal,
     });
     if (!response.ok) return unverifiedEligibility();
