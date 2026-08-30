@@ -1593,9 +1593,9 @@ function walletTypeLabel(value: 0 | 1 | 2 | 3): string {
 function walletStructureHint(value: 0 | 1 | 2 | 3): string {
   return [
     "You hold USDC on Polygon directly in this wallet — no funder address needed.",
-    "For Polymarket accounts created with an email login. Your funds sit in a Polymarket proxy wallet — paste its address as the funder below.",
-    "For Polymarket accounts created by connecting a wallet like MetaMask to polymarket.com. Your funds sit in a Polymarket Safe wallet — paste its address as the funder below.",
-    "Advanced: wallets that verify signatures through a smart contract. Paste the contract wallet address as the funder below.",
+    "For Polymarket accounts created with an email login. Your funds sit in a Polymarket proxy wallet — paste its address in the funder field.",
+    "For Polymarket accounts created by connecting a wallet like MetaMask to polymarket.com. Your funds sit in a Polymarket Safe wallet — paste its address in the funder field.",
+    "Advanced: wallets that verify signatures through a smart contract. Paste the contract wallet address into the funder field.",
   ][value] ?? "";
 }
 

@@ -2791,14 +2791,10 @@ th small {
 }
 
 .settings-hint {
-  margin: -6px 0 12px;
+  margin: 6px 0 14px;
   color: var(--faint);
   font-size: 0.66rem;
   line-height: 1.5;
-}
-
-.settings-card > .button + .settings-hint {
-  margin-top: 6px;
 }
 
 .settings-help {
