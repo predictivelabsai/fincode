@@ -1282,6 +1282,12 @@ select {
   align-items: center;
 }
 
+.ticket-field-error {
+  color: var(--danger, #f87171);
+  font-size: 0.56rem;
+  line-height: 1.35;
+}
+
 .post-only-field,
 .review-check {
   display: flex;

@@ -652,6 +652,7 @@ export function ProposalTicket(props: {
   pendingSignedOrder: boolean;
 }) {
   const { draft } = props;
+  const [fieldsValid, setFieldsValid] = useState(true);
   if (!draft) {
     return (
       <section className="ticket ticket-empty" aria-labelledby="ticket-heading">
@@ -667,7 +668,7 @@ export function ProposalTicket(props: {
   const proposal = draft.proposal;
   const geographyAllowsAction = proposal.action === "cancel" || props.tradeAllowed || props.pendingSignedOrder;
   const timeAllowsAction = !expired || props.pendingSignedOrder;
-  const canExecute = props.reviewed && props.sessionReady && geographyAllowsAction && timeAllowsAction && !props.submitting;
+  const canExecute = props.reviewed && props.sessionReady && geographyAllowsAction && timeAllowsAction && !props.submitting && (proposal.action === "cancel" || fieldsValid);
   const actionLabel = props.pendingSignedOrder
     ? "Reconcile signed order"
     : proposal.action === "cancel"
@@ -686,7 +687,7 @@ export function ProposalTicket(props: {
       </div>
 
       {proposal.action === "create" ? (
-        <OrderEditor proposal={proposal} onChange={props.onChange} />
+        <OrderEditor proposal={proposal} onChange={props.onChange} onValidityChange={setFieldsValid} />
       ) : (
         <CancellationSummary selector={proposal.selector} rationale={proposal.rationale} />
       )}
@@ -705,6 +706,7 @@ export function ProposalTicket(props: {
       <button className="button button-primary button-wide" type="button" onClick={props.onExecute} disabled={!canExecute}>
         {props.submitting ? "Waiting for wallet…" : actionLabel} <ArrowRight aria-hidden="true" />
       </button>
+      {proposal.action === "create" && !fieldsValid && <p className="restriction-note">Fix the highlighted fields — this exact text would be signed.</p>}
       {!props.sessionReady && <p className="restriction-note">Connect and verify the wallet before signing.</p>}
       {!props.tradeAllowed && proposal.action === "create" && !props.pendingSignedOrder && <p className="restriction-note">Real orders are disabled until geographic eligibility is verified.</p>}
       {props.pendingSignedOrder && <p className="reconcile-note">The browser retained this exact signed intent after an uncertain response. Reconcile checks the same order hash; it does not create a replacement order.</p>}
@@ -713,8 +715,88 @@ export function ProposalTicket(props: {
   );
 }
 
-function OrderEditor({ proposal, onChange }: { proposal: CreateOrderProposal; onChange: (proposal: TradingActionProposal) => void }) {
-  const update = (patch: Record<string, unknown>) => onChange({ ...proposal, ...patch } as TradingActionProposal);
+type EditableField = "price" | "size" | "amount" | "limitPrice" | "expiration";
+const EDITABLE_KEYS = ["price", "size", "amount", "limitPrice", "expiration"] as const;
+
+function sameEditableDraft(a: TradingActionProposal, b: TradingActionProposal): boolean {
+  if (a.action !== b.action) return false;
+  if (a.action === "cancel" || b.action === "cancel") return a === b;
+  const stableKeys = ["execution", "tokenId", "marketId", "marketQuestion", "outcome", "side", "rationale", "observedAt", "postOnly"] as const;
+  for (const key of stableKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  for (const key of EDITABLE_KEYS) {
+    if (String((a as Record<string, unknown>)[key] ?? "") !== String((b as Record<string, unknown>)[key] ?? "")) return false;
+  }
+  return true;
+}
+
+function OrderEditor({ proposal, onChange, onValidityChange }: {
+  proposal: CreateOrderProposal;
+  onChange: (proposal: TradingActionProposal) => void;
+  onValidityChange?: (valid: boolean) => void;
+}) {
+  // Numeric fields keep their in-progress text locally; the shared proposal only
+  // advances while the whole edited draft still parses, so intermediate states
+  // ("0.", trailing zeros, a cleared field) never snap back or silently compose
+  // a different number than the one on screen.
+  const [rawDrafts, setRawDrafts] = useState<Partial<Record<EditableField, string>>>({});
+  const lastCommitted = useRef<TradingActionProposal>(proposal);
+
+  useEffect(() => {
+    if (sameEditableDraft(proposal, lastCommitted.current)) {
+      lastCommitted.current = proposal;
+      return;
+    }
+    lastCommitted.current = proposal;
+    setRawDrafts({});
+  }, [proposal]);
+
+  const update = (patch: Record<string, unknown>) => {
+    const candidate = { ...proposal, ...patch } as TradingActionProposal;
+    const candidateParsed = tradingActionProposalSchema.safeParse(candidate);
+    if (candidateParsed.success) lastCommitted.current = candidateParsed.data;
+    onChange(candidate);
+  };
+
+  const rawValue = (field: EditableField, fallback: string) => rawDrafts[field] ?? fallback;
+  const expiryFallback = () => ((proposal as { expiration?: number }).expiration === undefined ? "" : String((proposal as { expiration?: number }).expiration));
+  const rawProposal = { ...proposal } as Record<string, unknown>;
+  if ("price" in proposal) {
+    rawProposal.price = rawValue("price", proposal.price);
+    rawProposal.size = rawValue("size", proposal.size);
+    if (proposal.execution === "GTD") rawProposal.expiration = Number(rawValue("expiration", expiryFallback()));
+  } else {
+    rawProposal.amount = rawValue("amount", proposal.amount);
+    rawProposal.limitPrice = rawValue("limitPrice", proposal.limitPrice);
+  }
+
+  const parsed = tradingActionProposalSchema.safeParse(rawProposal);
+  const fieldsValid = parsed.success;
+  const fieldErrors = new Map<string, string>();
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const key = String(issue.path[0] ?? "");
+      if (!fieldErrors.has(key)) fieldErrors.set(key, issue.message);
+    }
+  }
+
+  useEffect(() => {
+    onValidityChange?.(fieldsValid);
+  }, [fieldsValid, onValidityChange]);
+
+  const edit = (field: EditableField, raw: string) => {
+    setRawDrafts((current) => ({ ...current, [field]: raw }));
+    const candidate = { ...rawProposal, [field]: field === "expiration" ? Number(raw) : raw } as Record<string, unknown>;
+    const candidateParsed = tradingActionProposalSchema.safeParse(candidate);
+    if (candidateParsed.success) {
+      lastCommitted.current = candidateParsed.data;
+      onChange(candidateParsed.data);
+    }
+  };
+
+  const exposure = fieldsValid ? maximumExposure(parsed.success ? parsed.data as CreateOrderProposal : proposal) : "—";
+
   return (
     <div className="order-fields">
       <div className="ticket-market-line">
@@ -731,18 +813,18 @@ function OrderEditor({ proposal, onChange }: { proposal: CreateOrderProposal; on
         <TicketField label="Time in force"><output>{proposal.execution}</output></TicketField>
         {"price" in proposal ? (
           <>
-            <TicketField label="Limit price">
-              <input inputMode="decimal" value={proposal.price} onChange={(event) => update({ price: event.target.value })} />
+            <TicketField label="Limit price" error={fieldErrors.get("price")}>
+              <input inputMode="decimal" value={rawValue("price", proposal.price)} onChange={(event) => edit("price", event.target.value)} />
             </TicketField>
-            <TicketField label="Size (shares)">
-              <input inputMode="decimal" value={proposal.size} onChange={(event) => update({ size: event.target.value })} />
+            <TicketField label="Size (shares)" error={fieldErrors.get("size")}>
+              <input inputMode="decimal" value={rawValue("size", proposal.size)} onChange={(event) => edit("size", event.target.value)} />
             </TicketField>
             {proposal.execution === "GTD" && (
-              <TicketField label="Expires (Unix seconds)">
-                <input inputMode="numeric" value={proposal.expiration} onChange={(event) => update({ expiration: Number(event.target.value) })} />
+              <TicketField label="Expires (Unix seconds)" error={fieldErrors.get("expiration")}>
+                <input inputMode="numeric" value={rawValue("expiration", proposal.expiration === undefined ? "" : String(proposal.expiration))} onChange={(event) => edit("expiration", event.target.value)} />
               </TicketField>
             )}
-            <TicketField label="Maximum exposure"><output>{maximumExposure(proposal)}</output></TicketField>
+            <TicketField label="Maximum exposure"><output>{exposure}</output></TicketField>
             <label className="post-only-field">
               <input type="checkbox" checked={proposal.postOnly} onChange={(event) => update({ postOnly: event.target.checked })} />
               Post only
@@ -750,13 +832,13 @@ function OrderEditor({ proposal, onChange }: { proposal: CreateOrderProposal; on
           </>
         ) : (
           <>
-            <TicketField label={proposal.side === "BUY" ? "Amount (USDC)" : "Amount (shares)"}>
-              <input inputMode="decimal" value={proposal.amount} onChange={(event) => update({ amount: event.target.value })} />
+            <TicketField label={proposal.side === "BUY" ? "Amount (USDC)" : "Amount (shares)"} error={fieldErrors.get("amount")}>
+              <input inputMode="decimal" value={rawValue("amount", proposal.amount)} onChange={(event) => edit("amount", event.target.value)} />
             </TicketField>
-            <TicketField label="Worst accepted price">
-              <input inputMode="decimal" value={proposal.limitPrice} onChange={(event) => update({ limitPrice: event.target.value })} />
+            <TicketField label="Worst accepted price" error={fieldErrors.get("limitPrice")}>
+              <input inputMode="decimal" value={rawValue("limitPrice", proposal.limitPrice)} onChange={(event) => edit("limitPrice", event.target.value)} />
             </TicketField>
-            <TicketField label="Maximum exposure"><output>{maximumExposure(proposal)}</output></TicketField>
+            <TicketField label="Maximum exposure"><output>{exposure}</output></TicketField>
           </>
         )}
       </div>
@@ -766,8 +848,14 @@ function OrderEditor({ proposal, onChange }: { proposal: CreateOrderProposal; on
   );
 }
 
-function TicketField({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="ticket-field"><span>{label}</span>{children}</label>;
+function TicketField({ label, children, error }: { label: string; children: ReactNode; error?: string }) {
+  return (
+    <label className="ticket-field">
+      <span>{label}</span>
+      {children}
+      {error && <small className="ticket-field-error" role="alert">{error}</small>}
+    </label>
+  );
 }
 
 function CancellationSummary({ selector, rationale }: { selector: CancellationSelector; rationale: string }) {

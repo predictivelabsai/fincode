@@ -469,6 +469,50 @@ describe("routed workspace", () => {
     expect(accountHeading.compareDocumentPosition(statusHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("keeps typed order edits on screen instead of snapping back mid-decimal", async () => {
+    const user = userEvent.setup();
+    mocks.getAgentThreadItems.mockResolvedValueOnce([
+      { kind: "message", id: "message", role: "assistant", text: "Draft ready" },
+      {
+        kind: "proposal",
+        id: "proposal",
+        proposal: {
+          action: "create" as const,
+          execution: "GTC" as const,
+          tokenId: "123",
+          marketId: "condition-1",
+          marketQuestion: "Will the typed edit stay in place?",
+          outcome: "Yes",
+          side: "BUY" as const,
+          rationale: "Editing regression test",
+          observedAt: "2026-08-04T00:00:00.000Z",
+          price: "0.4",
+          size: "10",
+          postOnly: false,
+        },
+        expiresAt: "2099-08-04T00:02:00.000Z",
+      },
+    ]);
+    renderRoute(`/chat/${THREAD_A}`);
+
+    const price = await screen.findByLabelText("Limit price");
+    await user.clear(price);
+    expect(price).toHaveValue("");
+    await user.type(price, "0.55");
+    expect(price).toHaveValue("0.55");
+
+    const size = screen.getByLabelText("Size (shares)");
+    await user.clear(size);
+    await user.type(size, "2.5");
+    expect(size).toHaveValue("2.5");
+    expect(price).toHaveValue("0.55");
+
+    await user.type(size, "x");
+    expect(screen.getByText("Fix the highlighted fields — this exact text would be signed.")).toBeInTheDocument();
+    await user.type(size, "{backspace}");
+    expect(screen.queryByText("Fix the highlighted fields — this exact text would be signed.")).not.toBeInTheDocument();
+  });
+
   it("routes missing wallet sessions to Settings and requires local reattachment after restore", async () => {
     const user = userEvent.setup();
     const first = renderRoute("/trades");
