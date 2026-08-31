@@ -9,6 +9,7 @@ import { hashTypedData, verifyTypedData, type Address, type Hex } from "viem";
 
 import type { PolymarketPort } from "../src/polymarket.js";
 import type { IdempotencyClaim, TradingStore } from "../src/store.js";
+import { IDEMPOTENCY_STALE_SECONDS } from "../src/store.js";
 import type {
   AccountSnapshot,
   ApiKeyCreds,
@@ -18,12 +19,16 @@ import type {
   WalletSessionRecord,
 } from "../src/types.js";
 
+function isFailedResponse(response: unknown): boolean {
+  return Boolean(response && typeof response === "object" && (response as { ok?: unknown }).ok === false);
+}
+
 export class MemoryTradingStore implements TradingStore {
   readonly challenges = new Map<string, ChallengeRecord>();
   readonly sessions = new Map<string, WalletSessionRecord>();
   readonly intents = new Map<string, OrderIntentRecord>();
   readonly audits: Array<{ principalId: string; action: string; entityId?: string; detail?: unknown }> = [];
-  readonly idempotency = new Map<string, { hash: string; response?: unknown }>();
+  readonly idempotency = new Map<string, { hash: string; response?: unknown; createdAt: Date }>();
   readonly accountMirrors: Array<{ principalId: string; account: AccountSnapshot }> = [];
 
   async health() {}
@@ -111,7 +116,12 @@ export class MemoryTradingStore implements TradingStore {
     const mapKey = `${principalId}:${operation}:${key}`;
     const value = this.idempotency.get(mapKey);
     if (!value) {
-      this.idempotency.set(mapKey, { hash: requestHash });
+      this.idempotency.set(mapKey, { hash: requestHash, createdAt: new Date() });
+      return { state: "claimed" };
+    }
+    const stale = Date.now() - value.createdAt.getTime() >= IDEMPOTENCY_STALE_SECONDS * 1_000;
+    if (stale && (value.response === undefined || isFailedResponse(value.response))) {
+      this.idempotency.set(mapKey, { hash: requestHash, createdAt: new Date() });
       return { state: "claimed" };
     }
     if (value.hash !== requestHash) return { state: "mismatch" };
@@ -122,6 +132,14 @@ export class MemoryTradingStore implements TradingStore {
   async finishIdempotency(principalId: string, operation: string, key: string, response: unknown) {
     const value = this.idempotency.get(`${principalId}:${operation}:${key}`);
     if (value && value.response === undefined) value.response = response;
+  }
+
+  async releaseIdempotency(principalId: string, operation: string, key: string) {
+    const mapKey = `${principalId}:${operation}:${key}`;
+    const value = this.idempotency.get(mapKey);
+    if (!value || value.response !== undefined) return false;
+    this.idempotency.delete(mapKey);
+    return true;
   }
 
   async mirrorAccount(principalId: string, account: AccountSnapshot) {
