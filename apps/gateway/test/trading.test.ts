@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { parseConfig } from "../src/config.js";
 import { CredentialCipher } from "../src/crypto.js";
+import { AppError } from "../src/errors.js";
 import { TradingService } from "../src/trading.js";
 import type { Principal, WalletSessionRecord } from "../src/types.js";
 import { FakePolymarket, MemoryTradingStore } from "./fakes.js";
@@ -81,6 +82,47 @@ describe("TradingService", () => {
 
     expect(session.walletAddress).toBe(account.address);
     expect(context.store.sessions.get(session.sessionId)?.encryptedCredentials).not.toContain("secret");
+    await expect(
+      context.service.createSession(principal, challenge.challengeId, signature),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("releases the challenge when the credential exchange fails upstream", async () => {
+    const context = setup();
+    const challenge = await context.service.createChallenge(principal, {
+      walletAddress: account.address,
+      signatureType: 0,
+    });
+    const signature = await account.signTypedData(challenge.typedData as never);
+    context.polymarket.l1CredentialsError = new AppError(503, "UPSTREAM_UNAVAILABLE", "Polymarket wallet authentication is unavailable");
+
+    await expect(
+      context.service.createSession(principal, challenge.challengeId, signature),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(context.store.sessions.size).toBe(0);
+
+    // The burned challenge must not cost the user their signed session once the CLOB recovers.
+    context.polymarket.l1CredentialsError = null;
+    const session = await context.service.createSession(principal, challenge.challengeId, signature);
+    expect(session.walletAddress).toBe(account.address);
+  });
+
+  it("does not release the challenge when the wallet signature is invalid", async () => {
+    const context = setup();
+    const challenge = await context.service.createChallenge(principal, {
+      walletAddress: account.address,
+      signatureType: 0,
+    });
+    const signature = await account.signTypedData(challenge.typedData as never);
+    const tampered = await account.signTypedData({ ...challenge.typedData, message: { ...challenge.typedData.message, nonce: 99 } } as never);
+
+    await expect(
+      context.service.createSession(principal, challenge.challengeId, tampered),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      context.service.createSession(principal, challenge.challengeId, tampered),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    // The original signature must not become replayable after a failed forgery attempt.
     await expect(
       context.service.createSession(principal, challenge.challengeId, signature),
     ).rejects.toMatchObject({ statusCode: 409 });

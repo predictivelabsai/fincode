@@ -40,6 +40,13 @@ export class MemoryTradingStore implements TradingStore {
     return value;
   }
 
+  async releaseChallenge(id: string, principalId: string, usedAt: Date) {
+    const value = this.challenges.get(id);
+    if (!value || value.principalId !== principalId || value.usedAt !== usedAt) return false;
+    value.usedAt = undefined;
+    return true;
+  }
+
   async createSession(session: WalletSessionRecord) {
     this.sessions.set(session.id, session);
   }
@@ -149,6 +156,7 @@ export class FakePolymarket implements PolymarketPort {
   readonly cancellations: CancellationSelector[] = [];
   submitError: Error | null = null;
   submitResponse: OrderResponse | null = null;
+  l1CredentialsError: Error | null = null;
   reconciled: unknown | undefined;
   accountSnapshot: AccountSnapshot | null = null;
   paperMarket: MarketSearchMarket = {
@@ -194,6 +202,7 @@ export class FakePolymarket implements PolymarketPort {
   async getPriceHistory() { return { points: [] }; }
   async getRecentTrades() { return { trades: [] }; }
   async exchangeL1Credentials(): Promise<ApiKeyCreds> {
+    if (this.l1CredentialsError) throw this.l1CredentialsError;
     return { key: "key", secret: "secret", passphrase: "passphrase" };
   }
   async buildOrderIntent(session: WalletSessionRecord, proposal: CreateOrderProposal): Promise<BuiltOrderIntent> {

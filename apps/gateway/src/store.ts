@@ -9,6 +9,7 @@ export interface TradingStore {
   close(): Promise<void>;
   createChallenge(challenge: ChallengeRecord): Promise<void>;
   consumeChallenge(id: string, principalId: string, now: Date): Promise<ChallengeRecord | undefined>;
+  releaseChallenge(id: string, principalId: string, usedAt: Date): Promise<boolean>;
   createSession(session: WalletSessionRecord): Promise<void>;
   getSession(id: string, principalId: string, now: Date, idleSeconds: number): Promise<WalletSessionRecord | undefined>;
   getLatestSession(principalId: string, now: Date, idleSeconds: number): Promise<WalletSessionRecord | undefined>;
@@ -120,6 +121,16 @@ export class PostgresTradingStore implements TradingStore {
       [id, principalId, now],
     );
     return result.rows[0] ? challengeFromRow(result.rows[0]) : undefined;
+  }
+
+  /** Undo a consume when the session could not be created upstream (e.g. the CLOB is down). */
+  async releaseChallenge(id: string, principalId: string, usedAt: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE polytrade.wallet_challenges SET used_at=NULL
+       WHERE id=$1 AND principal_id=$2 AND used_at=$3`,
+      [id, principalId, usedAt],
+    );
+    return (result.rowCount ?? 0) === 1;
   }
 
   async createSession(value: WalletSessionRecord): Promise<void> {

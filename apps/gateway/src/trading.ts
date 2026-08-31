@@ -94,12 +94,21 @@ export class TradingService {
     } as never);
     if (!valid) throw validation("Wallet authentication signature is invalid");
 
-    const credentials = await this.polymarket.exchangeL1Credentials({
-      walletAddress: challenge.walletAddress,
-      signature,
-      timestampSeconds: challenge.timestampSeconds,
-      nonce: challenge.nonce,
-    });
+    let credentials: ApiKeyCreds;
+    try {
+      credentials = await this.polymarket.exchangeL1Credentials({
+        walletAddress: challenge.walletAddress,
+        signature,
+        timestampSeconds: challenge.timestampSeconds,
+        nonce: challenge.nonce,
+      });
+    } catch (error) {
+      // The consume is only safe to keep once the session actually gets built;
+      // a CLOB outage must not burn the user's signed challenge (fail-secure
+      // release: the CAS on used_at makes a concurrent consume win instead).
+      await this.store.releaseChallenge(challengeId, principal.id, current);
+      throw error;
+    }
     const sessionId = randomUUID();
     const absoluteExpiresAt = new Date(current.getTime() + this.config.WALLET_SESSION_MAX_SECONDS * 1_000);
     const idleExpiresAt = new Date(
