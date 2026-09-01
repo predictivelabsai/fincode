@@ -11,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   BacktestResult,
   BacktestRun,
@@ -20,7 +20,7 @@ import type {
   BacktestTrade,
 } from "@polytrade/contracts";
 
-import { BacktestClient } from "./backtest";
+import { BacktestApiError, BacktestClient } from "./backtest";
 
 const ACTIVE_STATUSES = new Set<BacktestRun["status"]>(["queued", "running"]);
 const TRADE_PAGE_SIZE = 50;
@@ -52,9 +52,17 @@ export function BacktestsWorkspace(props: {
   const [comparisons, setComparisons] = useState<BacktestRunEnvelope[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
+  const [listLoadFailed, setListLoadFailed] = useState(false);
+  const [selectedMissing, setSelectedMissing] = useState(false);
+  // One toast per distinct failure episode, instead of re-arming every 3s tick.
+  const pollErrorRef = useRef<string | null>(null);
+  // Remembers which terminal run/page has already been fully fetched so the
+  // poll stops re-downloading a completed run's series and ledger forever.
+  const settledRef = useRef<{ runId: string; phase: string; tradePage: number } | null>(null);
 
   useEffect(() => {
     if (props.focusedRunId) setSelectedId(props.focusedRunId);
+    setSelectedMissing(false);
   }, [props.focusedRunId]);
 
   // The library row already carries the title, status, and configuration, so the
@@ -114,17 +122,50 @@ export function BacktestsWorkspace(props: {
     let cancelled = false;
     let timer: number | undefined;
     const isActive = () => !cancelled;
+    const notify = (caught: unknown) => {
+      const text = messageFor(caught);
+      if (pollErrorRef.current !== text) {
+        pollErrorRef.current = text;
+        props.onError(text);
+      }
+    };
     const poll = async () => {
       try {
         const nextRuns = await refresh(isActive);
         if (cancelled) return;
+        setListLoadFailed(false);
+        pollErrorRef.current = null;
         const id = selectedId ?? props.focusedRunId ?? nextRuns[0]?.runId;
         if (id) {
           const listed = nextRuns.find((run) => run.runId === id);
-          await refreshSelected(id, isActive, listed?.status === "completed");
+          const settled =
+            listed && !ACTIVE_STATUSES.has(listed.status)
+            && settledRef.current?.runId === id
+            && settledRef.current.phase === listed.phase
+            && settledRef.current.tradePage === tradePage;
+          if (!settled) {
+            try {
+              await refreshSelected(id, isActive, listed?.status === "completed");
+              if (!cancelled && listed) {
+                setSelectedMissing(false);
+                if (!ACTIVE_STATUSES.has(listed.status)) {
+                  settledRef.current = { runId: id, phase: listed.phase, tradePage };
+                }
+              }
+            } catch (caught) {
+              if (cancelled) return;
+              if (caught instanceof BacktestApiError && caught.status === 404) {
+                setSelectedMissing(true);
+              } else {
+                notify(caught);
+              }
+            }
+          }
         }
       } catch (caught) {
-        if (!cancelled) props.onError(messageFor(caught));
+        if (cancelled) return;
+        setListLoadFailed(true);
+        notify(caught);
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -137,7 +178,7 @@ export function BacktestsWorkspace(props: {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [props.focusedRunId, props.onError, refresh, refreshSelected, selectedId]);
+  }, [props.focusedRunId, props.onError, refresh, refreshSelected, selectedId, tradePage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,7 +203,28 @@ export function BacktestsWorkspace(props: {
     setSelectedId(runId);
     setTradePage(0);
     setLoading(true);
+    setSelectedMissing(false);
     props.onSelectRun?.(runId);
+  };
+
+  const reloadList = async () => {
+    setLoading(true);
+    setListLoadFailed(false);
+    try {
+      const nextRuns = await props.client.list();
+      setRuns(nextRuns);
+      setSelectedId((current) => current ?? nextRuns[0]?.runId);
+      pollErrorRef.current = null;
+    } catch (caught) {
+      setListLoadFailed(true);
+      const text = messageFor(caught);
+      if (pollErrorRef.current !== text) {
+        pollErrorRef.current = text;
+        props.onError(text);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const toggleCompare = (run: BacktestRun) => {
@@ -220,6 +282,8 @@ export function BacktestsWorkspace(props: {
       setEnvelope(null);
       setDetails(null);
       setCompareIds((current) => current.filter((id) => id !== activeRun.runId));
+      // Keep the URL in step with the library, or a refresh would reopen the deleted run.
+      props.onSelectRun?.(next?.runId ?? "");
       props.onNotice("Backtest deleted.");
     } catch (caught) {
       props.onError(messageFor(caught));
@@ -237,7 +301,7 @@ export function BacktestsWorkspace(props: {
           <p>Evaluate strategy performance against one-minute Polymarket history with transparent execution assumptions and no wallet access.</p>
         </div>
         <div className="backtest-hero-actions">
-          <button className="button button-quiet" type="button" onClick={() => void refresh()}>
+          <button className="button button-quiet" type="button" onClick={() => void reloadList()}>
             <RefreshCw aria-hidden="true" /> Refresh runs
           </button>
           <button className="button button-dark" type="button" onClick={props.onAskAgent}>
@@ -258,12 +322,21 @@ export function BacktestsWorkspace(props: {
             <span>{runs.length}</span>
           </div>
           {runs.length === 0 && !loading ? (
-            <div className="run-empty">
-              <LineChart aria-hidden="true" />
-              <strong>No backtests yet</strong>
-              <p>Choose a resolved market and test momentum, mean reversion, or breakout.</p>
-              <button type="button" onClick={props.onAskAgent}>Open research chat</button>
-            </div>
+            listLoadFailed ? (
+              <div className="run-empty run-empty-error" role="alert">
+                <AlertTriangle aria-hidden="true" />
+                <strong>Backtests are unreachable</strong>
+                <p>The run library could not be loaded. Your backtests were not lost — the storage service is just not responding.</p>
+                <button type="button" onClick={() => void reloadList()}>Try again</button>
+              </div>
+            ) : (
+              <div className="run-empty">
+                <LineChart aria-hidden="true" />
+                <strong>No backtests yet</strong>
+                <p>Choose a resolved market and test momentum, mean reversion, or breakout.</p>
+                <button type="button" onClick={props.onAskAgent}>Open research chat</button>
+              </div>
+            )
           ) : (
             <div className="run-list">
               {runs.map((run) => (
@@ -321,6 +394,15 @@ export function BacktestsWorkspace(props: {
               )}
               <ConfigurationStrip run={activeRun} />
             </>
+          ) : selectedMissing ? (
+            <div className="stage-empty stage-missing" role="alert">
+              <AlertTriangle aria-hidden="true" />
+              <h2>Backtest not found</h2>
+              <p>This run no longer exists or belongs to another account.</p>
+              <button type="button" className="button button-quiet" onClick={() => props.onSelectRun?.("")}>
+                <RotateCcw aria-hidden="true" /> Back to all backtests
+              </button>
+            </div>
           ) : loading ? <LoadingTape /> : (
             <div className="stage-empty"><Activity aria-hidden="true" /><h2>Select a replay tape</h2><p>Choose a recent run to inspect its assumptions, fills, and result.</p></div>
           )}

@@ -1725,6 +1725,63 @@ th small {
   color: var(--info);
 }
 
+.paper-load-failed {
+  flex-direction: column;
+  gap: 12px;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 24px;
+  text-align: center;
+}
+
+.paper-load-failed svg {
+  width: 22px;
+  color: var(--danger);
+}
+
+.paper-load-failed strong {
+  color: var(--danger);
+  font-size: 0.76rem;
+}
+
+.paper-load-failed p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.chat-load-error {
+  margin: 24px auto;
+  max-width: 520px;
+  padding: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid rgba(251, 113, 133, 0.35);
+  border-radius: 10px;
+  background: rgba(251, 113, 133, 0.07);
+}
+
+.chat-load-error > svg {
+  flex: 0 0 auto;
+  width: 18px;
+  margin-top: 2px;
+  color: var(--danger);
+}
+
+.chat-load-error strong {
+  color: var(--danger);
+  font-size: 0.72rem;
+}
+
+.chat-load-error p {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }
@@ -3153,6 +3210,23 @@ th small {
   background: transparent;
   font-size: 0.65rem;
   cursor: pointer;
+}
+
+/* Error variants of the empty states: same shape, danger accents. */
+.run-empty-error svg,
+.stage-missing svg {
+  color: var(--danger);
+}
+
+.run-empty-error strong,
+.stage-missing strong {
+  color: var(--danger);
+}
+
+.stage-missing {
+  padding: 34px 18px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .backtest-stage {
