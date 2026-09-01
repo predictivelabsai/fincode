@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { parseConfig } from "../src/config.js";
 import { CredentialCipher } from "../src/crypto.js";
+import { AppError } from "../src/errors.js";
 import { TradingService } from "../src/trading.js";
 import type { Principal, WalletSessionRecord } from "../src/types.js";
 import { FakePolymarket, MemoryTradingStore } from "./fakes.js";
@@ -67,6 +68,11 @@ function proposal(execution: "GTC" | "GTD" | "FOK" | "FAK"): CreateOrderProposal
     : execution === "GTD"
       ? { ...base, execution, price: "0.4", size: "10", expiration: Math.floor(now.getTime() / 1_000) + 3_600 }
       : { ...base, execution, amount: "4", limitPrice: "0.5", postOnly: false };
+}
+
+/** Mimics the clob-client's ApiError shape (Error subclass with an HTTP status). */
+function httpError(status: number, message: string): Error {
+  return Object.assign(new Error(message), { status });
 }
 
 describe("TradingService", () => {
@@ -303,6 +309,76 @@ describe("TradingService", () => {
     const result = await context.service.submitIntent(principal, intent.intentId, signature) as { orderID: string };
     expect(result.orderID).toBe("reconciled-order");
     expect(context.polymarket.submitted).toHaveLength(1);
+  });
+
+  it("settles definitive CLOB refusals as REJECTED instead of bricking the intent as AMBIGUOUS", async () => {
+    const context = setup();
+    await addSession(context);
+    const intent = await context.service.createIntent(
+      principal,
+      "00000000-0000-4000-8000-000000000001",
+      proposal("GTC"),
+      "intent-definitive-rejection",
+    );
+    const signature = await account.signTypedData(intent.typedData as never);
+    context.polymarket.submitError = httpError(400, "not enough balance / allowance");
+
+    await expect(
+      context.service.submitIntent(principal, intent.intentId, signature),
+    ).rejects.toMatchObject({ statusCode: 400, code: "ORDER_REJECTED" });
+    expect(context.store.intents.get(intent.intentId)?.status).toBe("REJECTED");
+    expect(context.store.audits.at(-1)).toMatchObject({ action: "order_submission_rejected" });
+
+    // A declined intent is terminal: resubmitting it fails fast and clearly
+    // instead of looping through an ambiguous reconcile that always 404s.
+    await expect(
+      context.service.submitIntent(principal, intent.intentId, signature),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(context.polymarket.submitted).toHaveLength(1);
+  });
+
+  it("keeps gateway validation failures terminal without losing their status code", async () => {
+    const context = setup();
+    await addSession(context);
+    const intent = await context.service.createIntent(
+      principal,
+      "00000000-0000-4000-8000-000000000001",
+      proposal("GTC"),
+      "intent-apperror-rejection",
+    );
+    const signature = await account.signTypedData(intent.typedData as never);
+    context.polymarket.submitError = new AppError(403, "FORBIDDEN", "Geographic restrictions apply");
+
+    await expect(
+      context.service.submitIntent(principal, intent.intentId, signature),
+    ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+    expect(context.store.intents.get(intent.intentId)?.status).toBe("REJECTED");
+  });
+
+  it("treats upstream 5xx and timeouts as ambiguous, never as rejected", async () => {
+    const context = setup();
+    await addSession(context);
+    const intent = await context.service.createIntent(
+      principal,
+      "00000000-0000-4000-8000-000000000001",
+      proposal("FAK"),
+      "intent-timeout",
+    );
+    const signature = await account.signTypedData(intent.typedData as never);
+    context.polymarket.submitError = httpError(504, "The operation was aborted due to timeout");
+    await expect(context.service.submitIntent(principal, intent.intentId, signature)).rejects.toThrow();
+    expect(context.store.intents.get(intent.intentId)?.status).toBe("AMBIGUOUS");
+
+    const retry = await context.service.createIntent(
+      principal,
+      "00000000-0000-4000-8000-000000000001",
+      proposal("GTC"),
+      "intent-network-error",
+    );
+    const retrySignature = await account.signTypedData(retry.typedData as never);
+    context.polymarket.submitError = new Error("fetch failed");
+    await expect(context.service.submitIntent(principal, retry.intentId, retrySignature)).rejects.toThrow();
+    expect(context.store.intents.get(retry.intentId)?.status).toBe("AMBIGUOUS");
   });
 
   it("preserves partial-fill amounts and trade IDs from the CLOB response", async () => {

@@ -16,7 +16,7 @@ import { getAddress, verifyTypedData, type Hex } from "viem";
 
 import type { GatewayConfig } from "./config.js";
 import { CredentialCipher } from "./crypto.js";
-import { conflict, notFound, validation } from "./errors.js";
+import { AppError, conflict, isDefinitiveRejection, notFound, validation } from "./errors.js";
 import { buildL1TypedData, type PolymarketPort } from "./polymarket.js";
 import type { TradingStore } from "./store.js";
 import type {
@@ -275,6 +275,19 @@ export class TradingService {
       });
       return response;
     } catch (error) {
+      // A 4xx from the CLOB means Polymarket processed the request and refused
+      // it — the signed order was never accepted, so the intent can settle
+      // terminally as REJECTED instead of stuck in an ambiguous reconcile loop.
+      // Anything else (timeouts, 5xx, network errors) stays AMBIGUOUS because
+      // the order may still have landed.
+      if (isDefinitiveRejection(error)) {
+        await this.store.setIntentStatus(intent.id, principal.id, "REJECTED", { signedOrderHash });
+        await this.store.appendAudit(principal.id, "order_submission_rejected", intent.id, {
+          signedOrderHash,
+          reason: error instanceof Error ? error.message : "Polymarket rejected the order",
+        });
+        throw definiteRejection(error);
+      }
       await this.store.setIntentStatus(intent.id, principal.id, "AMBIGUOUS", { signedOrderHash });
       await this.store.appendAudit(principal.id, "order_submission_ambiguous", intent.id, {
         signedOrderHash,
@@ -331,6 +344,17 @@ export class TradingService {
     if (!session) throw notFound("Wallet session is missing, expired, or revoked");
     return session;
   }
+}
+
+/**
+ * Surface a definitive rejection with its upstream status instead of the raw
+ * third-party error (which the error handler would otherwise map to a generic
+ * 500). AppErrors already carry their own status and keep it.
+ */
+function definiteRejection(error: unknown): unknown {
+  if (error instanceof AppError) return error;
+  const message = error instanceof Error && error.message ? error.message : "Polymarket rejected the order";
+  return new AppError(400, "ORDER_REJECTED", message);
 }
 
 function intentResponse(intent: OrderIntentRecord): OrderIntentResponse {
