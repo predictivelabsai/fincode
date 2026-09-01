@@ -4,13 +4,16 @@ import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 
+import { AlertSender } from "../src/alert-sender.js";
+import { AlertService } from "../src/alert-service.js";
 import { buildApp } from "../src/app.js";
 import { parseConfig } from "../src/config.js";
-import { AppError } from "../src/errors.js";
+import { CredentialCipher } from "../src/crypto.js";
+import { AppError, unauthorized } from "../src/errors.js";
 import { PublicMarketService } from "../src/public-market.js";
 import { TtlCache } from "../src/public-cache.js";
 import type { Principal } from "../src/types.js";
-import { FakePolymarket, MemoryTradingStore, publicMarketSummaryFixture } from "./fakes.js";
+import { FakePolymarket, MemoryAlertStore, MemoryTradingStore, publicMarketSummaryFixture } from "./fakes.js";
 
 const principal: Principal = {
   id: "assethero:user-1",
@@ -181,10 +184,22 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     start: async () => emptyPaperStrategy,
     stop: async () => emptyPaperStrategy,
   };
+  const alertStore = new MemoryAlertStore();
+  const alertRequests: Array<{ url: string; body: string }> = [];
+  const alertSender = new AlertSender(config(trustedProxies, configOverrides), async (url, init) => {
+    alertRequests.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(null, { status: 204 });
+  });
+  const alerts = new AlertService(
+    alertStore,
+    new CredentialCipher(config(trustedProxies, configOverrides).credentialKey),
+    alertSender,
+  );
   const app = await buildApp({
     config: config(trustedProxies, configOverrides),
     verifier: { verifyAuthorization: async (header: string | undefined, scope: string) => {
-      if (!header) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
+      // Mimic JwtVerifier.verifyAuthorization: reject missing Bearer headers.
+      if (!header?.startsWith("Bearer ")) throw unauthorized("Bearer token required");
       verifiedScopes.push(scope);
       return principal;
     } } as never,
@@ -193,6 +208,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     trading: trading as never,
     paper: paper as never,
     paperStrategy: paperStrategy as never,
+    alerts,
     publicMarkets: new PublicMarketService(polymarket, new TtlCache()),
   });
   await app.ready();
@@ -204,6 +220,8 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     createdIntents,
     submittedIntents,
     verifiedScopes,
+    alertStore,
+    alertRequests,
     polymarket,
   };
 }
@@ -756,5 +774,156 @@ describe("gateway HTTP boundary", () => {
       await app.close();
       await agent.close();
     }
+  });
+});
+
+describe("alert channel boundary", () => {
+  const headers = { authorization: "Bearer token", "content-type": "application/json" };
+  const discordBody = {
+    kind: "discord",
+    label: "Trading Discord",
+    target: "https://discord.com/api/webhooks/1234/abcdefghij",
+    eventKinds: ["BUY", "SELL"],
+  };
+
+  it("requires research auth for alert routes", async () => {
+    const { app } = await setup();
+    const unauth = await app.inject({ method: "GET", url: "/v1/alerts/channels" });
+    expect(unauth.statusCode).toBe(401);
+    const unauthCreate = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { "content-type": "application/json", "idempotency-key": "alert-create-key-1" },
+      payload: discordBody,
+    });
+    expect(unauthCreate.statusCode).toBe(401);
+    const unauthTest = await app.inject({
+      method: "POST",
+      url: `/v1/alerts/channels/${"00000000-0000-4000-8000-000000000000"}/test`,
+      headers: { "idempotency-key": "alert-test-key-1" },
+    });
+    expect(unauthTest.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("creates, lists, tests, and deletes a channel without ever exposing the target", async () => {
+    const { app, alertStore, alertRequests } = await setup();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-create-key-1" },
+      payload: discordBody,
+    });
+    expect(created.statusCode).toBe(200);
+    const channel = created.json() as { channelId: string; targetHint: string };
+    expect(channel.targetHint).toContain("ghij");
+    expect(created.body).not.toContain("abcdefghij");
+    expect(created.body).not.toContain("encryptedTarget");
+
+    const listed = await app.inject({ method: "GET", url: "/v1/alerts/channels", headers });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ items: [created.json()] });
+    expect(listed.body).not.toContain("abcdefghij");
+
+    const tested = await app.inject({
+      method: "POST",
+      url: `/v1/alerts/channels/${channel.channelId}/test`,
+      headers: { authorization: "Bearer token", "idempotency-key": "alert-test-key-1" },
+    });
+    expect(tested.statusCode, tested.body).toBe(200);
+    expect(tested.json()).toEqual({ status: "sent", error: null });
+    expect(alertRequests).toEqual([{
+      url: "https://discord.com/api/webhooks/1234/abcdefghij",
+      body: JSON.stringify({ content: "PolyTrade test alert — strategy alert delivery is wired up." }),
+    }]);
+
+    const deliveries = await app.inject({ method: "GET", url: "/v1/alerts/deliveries", headers });
+    expect(deliveries.statusCode).toBe(200);
+    expect(deliveries.json()).toEqual({ items: [], limit: 20 });
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/alerts/channels/${channel.channelId}`,
+      headers: { authorization: "Bearer token", "idempotency-key": "alert-delete-key-1" },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(alertStore.channels.size).toBe(0);
+    await app.close();
+  });
+
+  it("replays an idempotent channel creation instead of duplicating it", async () => {
+    const { app, alertStore } = await setup();
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-create-key-2" },
+      payload: discordBody,
+    });
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-create-key-2" },
+      payload: discordBody,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toBe(first.body);
+    expect(alertStore.channels.size).toBe(1);
+    await app.close();
+  });
+
+  it("rejects a duplicate label with 409 and unknown deletes with 404", async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-create-key-3" },
+      payload: discordBody,
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-create-key-4" },
+      payload: { ...discordBody, target: "https://discord.com/api/webhooks/999/zzzz" },
+    });
+    expect(duplicate.statusCode).toBe(409);
+
+    const missing = await app.inject({
+      method: "DELETE",
+      url: `/v1/alerts/channels/${"00000000-0000-4000-8000-000000000000"}`,
+      headers: { authorization: "Bearer token", "idempotency-key": "alert-delete-key-1" },
+    });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("surfaces a clear failed test send when the Telegram bot token is missing", async () => {
+    const { app } = await setup("127.0.0.1/32,::1/128", { TELEGRAM_BOT_TOKEN: undefined });
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/channels",
+      headers: { ...headers, "idempotency-key": "alert-tg-key-1" },
+      payload: {
+        kind: "telegram",
+        label: "Phone",
+        target: "-1001234567890",
+        eventKinds: ["ERROR"],
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const channel = created.json() as { channelId: string; targetHint: string };
+    expect(channel.targetHint).toBe("chat -1001234567890");
+
+    const tested = await app.inject({
+      method: "POST",
+      url: `/v1/alerts/channels/${channel.channelId}/test`,
+      headers: { authorization: "Bearer token", "idempotency-key": "alert-tg-test-1" },
+    });
+    expect(tested.statusCode).toBe(200);
+    expect(tested.json()).toEqual({
+      status: "failed",
+      error: "TELEGRAM_BOT_TOKEN is not configured on the gateway",
+    });
+    await app.close();
   });
 });

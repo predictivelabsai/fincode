@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   accountOverviewSchema,
+  alertChannelSchema,
+  alertCreateChannelRequestSchema,
+  alertEventKindSchema,
+  paperStrategyActionSchema,
   backtestConfigSchema,
   backtestRunListSchema,
   breakoutBacktestConfigSchema,
@@ -260,5 +264,68 @@ describe("paper trading contracts", () => {
       intervalSeconds: 1,
     })).toThrow();
     expect(paperStrategySnapshotSchema.parse({ strategy: null, events: [] })).toEqual({ strategy: null, events: [] });
+  });
+});
+
+describe("alert channel contracts", () => {
+  const validDiscord = {
+    kind: "discord",
+    label: "Trading Discord",
+    target: "https://discord.com/api/webhooks/1234/abcdefghij",
+    eventKinds: ["BUY", "SELL"],
+  };
+  const validTelegram = {
+    kind: "telegram",
+    label: "Phone",
+    target: "-1001234567890",
+    eventKinds: ["ERROR"],
+  };
+
+  it("accepts Discord webhook URLs and Telegram chat ids", () => {
+    expect(alertCreateChannelRequestSchema.parse(validDiscord).kind).toBe("discord");
+    expect(alertCreateChannelRequestSchema.parse(validTelegram).target).toBe("-1001234567890");
+  });
+
+  it("rejects non-webhook, non-HTTPS, and foreign-host Discord targets", () => {
+    for (const target of [
+      "",
+      "not-a-url",
+      "https://evil.example/api/webhooks/123/token",
+      "http://discord.com/api/webhooks/123/token",
+      "https://discord.com/invite/abc",
+      "https://evil.com/api/webhooks/123/token",
+      "https://discord.com/api/webhooks/",
+    ]) {
+      expect(() => alertCreateChannelRequestSchema.parse({ ...validDiscord, target })).toThrow();
+    }
+  });
+
+  it("rejects malformed Telegram chat ids and empty event kinds", () => {
+    expect(() => alertCreateChannelRequestSchema.parse({ ...validTelegram, target: "12a" })).toThrow();
+    expect(() => alertCreateChannelRequestSchema.parse({ ...validTelegram, target: "" })).toThrow();
+    expect(() => alertCreateChannelRequestSchema.parse({ ...validDiscord, eventKinds: [] })).toThrow();
+  });
+
+  it("excludes WAIT from alertable event kinds", () => {
+    expect([...alertEventKindSchema.options].sort())
+      .toEqual([...paperStrategyActionSchema.options.filter((kind) => kind !== "WAIT")].sort());
+    expect(alertEventKindSchema.safeParse("WAIT").success).toBe(false);
+  });
+
+  it("never exposes the encrypted target on channel responses", () => {
+    const keys = Object.keys(alertChannelSchema.shape);
+    expect(keys).not.toContain("target");
+    expect(keys).not.toContain("encryptedTarget");
+    expect(keys).toContain("targetHint");
+    expect(alertChannelSchema.parse({
+      channelId: "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
+      kind: "telegram",
+      label: "Phone",
+      eventKinds: ["BUY"],
+      enabled: true,
+      targetHint: "chat 123456789",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    }).targetHint).toBe("chat 123456789");
   });
 });

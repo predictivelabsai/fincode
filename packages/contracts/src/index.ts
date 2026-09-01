@@ -476,6 +476,95 @@ export const paperStrategySnapshotSchema = z.object({
   events: z.array(paperStrategyEventSchema),
 });
 
+export const alertChannelKindSchema = z.enum(["discord", "telegram"]);
+
+// Same literal values as paperStrategyActionSchema, minus "WAIT" — WAIT fires on
+// every scan and is too noisy to notify on.
+export const alertEventKindSchema = z.enum(["STARTED", "BUY", "SELL", "ERROR", "STOPPED"]);
+
+const alertTargetHint = z.string().min(1).max(120);
+
+const alertChannelBase = {
+  channelId: z.string().uuid(),
+  label: z.string().min(1).max(80),
+  eventKinds: z.array(alertEventKindSchema).min(1),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  // Display-only hint ("discord.com/api/webhooks/…9f2a"). The usable webhook URL
+  // or chat id is never serialized — only `target` in the create request, which
+  // is encrypted and never echoed back.
+  targetHint: alertTargetHint,
+};
+
+export const alertChannelSchema = z.object({
+  kind: alertChannelKindSchema,
+  ...alertChannelBase,
+});
+
+export const alertChannelListSchema = z.object({ items: z.array(alertChannelSchema) });
+
+export const alertCreateChannelRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("discord"),
+    label: z.string().min(1).max(80),
+    target: z.string().superRefine((value, ctx) => {
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        ctx.addIssue({ code: "custom", message: "Target must be an HTTPS Discord webhook URL" });
+        return;
+      }
+      const okHost = ["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"]
+        .includes(url.hostname);
+      const okPath = /^\/api\/webhooks\/\d+\/[\w-]+$/.test(url.pathname);
+      if (url.protocol !== "https:" || !okHost || !okPath) {
+        ctx.addIssue({ code: "custom", message: "Target must be an HTTPS Discord webhook URL" });
+      }
+    }),
+    eventKinds: z.array(alertEventKindSchema).min(1),
+  }),
+  z.object({
+    kind: z.literal("telegram"),
+    label: z.string().min(1).max(80),
+    target: z.string().regex(/^-?\d{3,20}$/, "Target must be a Telegram chat id"),
+    eventKinds: z.array(alertEventKindSchema).min(1),
+  }),
+]);
+
+export const alertDeliveryStatusSchema = z.enum(["pending", "delivered", "failed"]);
+
+export const alertDeliverySchema = z.object({
+  deliveryId: z.string().uuid(),
+  channelId: z.string().uuid(),
+  channelLabel: z.string().min(1).max(80),
+  channelKind: alertChannelKindSchema,
+  action: paperStrategyActionSchema,
+  message: z.string().min(1).max(2_000),
+  context: z.object({
+    marketQuestion: z.string().max(1_000).nullable(),
+    outcome: z.string().max(200).nullable(),
+    side: sideSchema.nullable(),
+    price: priceString.nullable(),
+  }),
+  status: alertDeliveryStatusSchema,
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  createdAt: z.string().datetime(),
+  deliveredAt: z.string().datetime().nullable(),
+});
+
+export const alertDeliveryListSchema = z.object({
+  items: z.array(alertDeliverySchema),
+  limit: z.number().int().positive(),
+});
+
+export const alertTestSendResponseSchema = z.object({
+  status: z.enum(["sent", "failed"]),
+  error: z.string().nullable(),
+});
+
 export const orderIntentResponseSchema = z.object({
   intentId: z.string().uuid(),
   expiresAt: z.string().datetime(),
@@ -742,6 +831,15 @@ export type PaperStrategyAction = z.infer<typeof paperStrategyActionSchema>;
 export type PaperStrategy = z.infer<typeof paperStrategySchema>;
 export type PaperStrategyEvent = z.infer<typeof paperStrategyEventSchema>;
 export type PaperStrategySnapshot = z.infer<typeof paperStrategySnapshotSchema>;
+export type AlertChannelKind = z.infer<typeof alertChannelKindSchema>;
+export type AlertEventKind = z.infer<typeof alertEventKindSchema>;
+export type AlertChannel = z.infer<typeof alertChannelSchema>;
+export type AlertChannelList = z.infer<typeof alertChannelListSchema>;
+export type AlertCreateChannelRequest = z.infer<typeof alertCreateChannelRequestSchema>;
+export type AlertDeliveryStatus = z.infer<typeof alertDeliveryStatusSchema>;
+export type AlertDelivery = z.infer<typeof alertDeliverySchema>;
+export type AlertDeliveryList = z.infer<typeof alertDeliveryListSchema>;
+export type AlertTestSendResponse = z.infer<typeof alertTestSendResponseSchema>;
 export type CreateIntentRequest = z.infer<typeof createIntentRequestSchema>;
 export type OrderIntentResponse = z.infer<typeof orderIntentResponseSchema>;
 export type TypedData = z.infer<typeof typedDataSchema>;

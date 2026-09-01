@@ -5,6 +5,11 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import {
   accountOverviewSchema,
+  alertChannelListSchema,
+  alertChannelSchema,
+  alertCreateChannelRequestSchema,
+  alertDeliveryListSchema,
+  alertTestSendResponseSchema,
   cancelRequestSchema,
   createIntentRequestSchema,
   paperFillsResponseSchema,
@@ -30,6 +35,7 @@ import {
 import type { Hex } from "viem";
 import { z } from "zod";
 
+import type { AlertService } from "./alert-service.js";
 import type { JwtVerifier } from "./auth.js";
 import type { GatewayConfig } from "./config.js";
 import { AppError, conflict, forbidden, validation } from "./errors.js";
@@ -52,6 +58,8 @@ export interface AppDependencies {
   paperStrategy: PaperStrategyService;
   publicMarkets: PublicMarketService;
   paperStrategyRunner?: { close(): Promise<void> };
+  alerts: AlertService;
+  alertsRunner?: { close(): Promise<void> };
 }
 
 const marketQuery = z.object({
@@ -70,6 +78,10 @@ const batchSubmitSchema = z.object({ items: z.array(z.object({ intentId: z.strin
 const paperFillsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
+});
+const alertChannelParams = z.object({ channelId: z.string().uuid() });
+const alertDeliveriesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 const publicMarketListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(24).default(12),
@@ -92,6 +104,9 @@ export async function buildApp(deps: AppDependencies) {
           "req.body.signature",
           "req.body.items[*].signature",
           "*.encryptedCredentials",
+          "*.encryptedTarget",
+          "*.target",
+          "*.botToken",
           "*.secret",
           "*.passphrase",
           "*.reasoning_content",
@@ -299,6 +314,51 @@ export async function buildApp(deps: AppDependencies) {
     schema: { tags: ["paper"], response: { 200: paperStrategySnapshotSchema } },
   }, (request) => deps.paperStrategy.stop(principal(request)));
 
+  app.get("/v1/alerts/channels", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["alerts"], response: { 200: alertChannelListSchema } },
+  }, (request) => deps.alerts.listChannels(principal(request).id));
+
+  app.post("/v1/alerts/channels", {
+    preHandler: authenticate("research"),
+    schema: {
+      tags: ["alerts"],
+      body: alertCreateChannelRequestSchema,
+      response: { 200: alertChannelSchema },
+    },
+  }, (request) => {
+    const body = alertCreateChannelRequestSchema.parse(request.body);
+    return runIdempotent(request, "alert-channel.create", body, () =>
+      deps.alerts.createChannel(principal(request).id, body));
+  });
+
+  app.delete("/v1/alerts/channels/:channelId", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["alerts"], params: alertChannelParams },
+  }, async (request, reply) => {
+    const { channelId } = alertChannelParams.parse(request.params);
+    await runIdempotent(request, "alert-channel.delete", { channelId }, () =>
+      deps.alerts.deleteChannel(principal(request).id, channelId));
+    return reply.status(204).send();
+  });
+
+  app.post("/v1/alerts/channels/:channelId/test", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["alerts"], params: alertChannelParams, response: { 200: alertTestSendResponseSchema } },
+  }, (request) => {
+    const { channelId } = alertChannelParams.parse(request.params);
+    return runIdempotent(request, "alert-channel.test", { channelId }, () =>
+      deps.alerts.testSend(principal(request).id, channelId));
+  });
+
+  app.get("/v1/alerts/deliveries", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["alerts"], querystring: alertDeliveriesQuery, response: { 200: alertDeliveryListSchema } },
+  }, (request) => {
+    const query = alertDeliveriesQuery.parse(request.query);
+    return deps.alerts.listDeliveries(principal(request).id, query.limit);
+  });
+
   app.post("/v1/wallet-sessions/challenge", { preHandler: authenticate("trade"), schema: { tags: ["wallet"], body: walletChallengeRequestSchema } }, (request) => {
     const body = walletChallengeRequestSchema.parse(request.body);
     return runIdempotent(request, "wallet-session.challenge", body, () =>
@@ -368,6 +428,7 @@ export async function buildApp(deps: AppDependencies) {
   });
 
   app.addHook("onClose", async () => {
+    await deps.alertsRunner?.close();
     await deps.paperStrategyRunner?.close();
     await deps.store.close();
   });

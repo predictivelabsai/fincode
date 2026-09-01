@@ -2,6 +2,7 @@ import {
   Activity,
   ArrowRight,
   BarChart3,
+  Bell,
   BriefcaseBusiness,
   Check,
   ChevronRight,
@@ -84,6 +85,7 @@ import {
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
+import { AlertsSettings } from "./Alerts";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -1245,6 +1247,11 @@ function SettingsPage() {
           <StatusLine label="Country / region" value={workspace.eligibility ? `${workspace.eligibility.country || "—"} / ${workspace.eligibility.region || "—"}` : "Checking"} />
           <StatusLine label="Identity" value="Signed in with Clerk" tone="good" />
           <button className="button button-quiet" type="button" onClick={() => void workspace.refreshEligibility()}><RefreshCw /> Recheck eligibility</button>
+        </section>
+
+        <section className="settings-card settings-card-wide alerts-settings-card">
+          <div className="settings-card-heading"><Bell /><div><span className="eyebrow">Notifications</span><h2>Strategy alerts</h2></div></div>
+          <AlertsSettings client={workspace.gateway} onError={workspace.setMessage} onNotice={(notice) => workspace.setMessage(notice, "notice")} />
         </section>
 
         <section className="settings-card settings-card-wide">
