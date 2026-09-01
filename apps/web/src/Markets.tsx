@@ -253,7 +253,7 @@ export function MarketDetailWorkspace(props: {
   const [detail, setDetail] = useState<PublicMarketDetail | null>(null);
   const [book, setBook] = useState<PublicOrderBook | null>(null);
   const [history, setHistory] = useState<PublicPriceHistory | null>(null);
-  const [interval, setInterval] = useState<MarketHistoryInterval>("1d");
+  const [tapeInterval, setTapeInterval] = useState<MarketHistoryInterval>("1d");
   const [selectedToken, setSelectedToken] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -328,7 +328,7 @@ export function MarketDetailWorkspace(props: {
     let cancelled = false;
     setHistory(null);
     void props.client
-      .publicPriceHistory(activeToken, interval)
+      .publicPriceHistory(activeToken, tapeInterval)
       .then((value) => {
         if (!cancelled) setHistory(value);
       })
@@ -338,7 +338,7 @@ export function MarketDetailWorkspace(props: {
     return () => {
       cancelled = true;
     };
-  }, [activeToken, interval, props.client]);
+  }, [activeToken, tapeInterval, props.client]);
 
   useDocumentMeta({
     title: market ? `${market.question} · PolyTrade` : "Market · PolyTrade",
@@ -430,6 +430,10 @@ export function MarketDetailWorkspace(props: {
           <strong>{formatCompact(market.liquidity)}</strong>
         </div>
         <div className="result-metric">
+          <span>Total volume</span>
+          <strong>{formatCompact(market.volume)}</strong>
+        </div>
+        <div className="result-metric">
           <span>End date</span>
           <strong>{market.endDate ? formatDate(market.endDate) : "—"}</strong>
         </div>
@@ -453,10 +457,10 @@ export function MarketDetailWorkspace(props: {
             <span className="market-tape-intervals" role="group" aria-label="History interval">
               {TAPE_INTERVALS.map((value) => (
                 <button
-                  className={`market-toggle ${interval === value ? "market-toggle-active" : ""}`}
+                  className={`market-toggle ${tapeInterval === value ? "market-toggle-active" : ""}`}
                   key={value}
                   type="button"
-                  onClick={() => setInterval(value)}
+                  onClick={() => setTapeInterval(value)}
                 >{value}</button>
               ))}
             </span>

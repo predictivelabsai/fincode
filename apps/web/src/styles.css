@@ -4410,6 +4410,8 @@ th small {
 }
 
 .market-ribbon .result-metric em {
+  display: block;
+  margin-top: 3px;
   font-style: normal;
   color: var(--faint);
   font-size: 0.75rem;
