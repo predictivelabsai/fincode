@@ -257,6 +257,75 @@ export const marketSearchResponseSchema = z.object({
   events: z.array(marketSearchEventSchema),
 });
 
+export const publicMarketSchema = marketSearchMarketSchema.extend({
+  icon: z.string().optional(),
+  volume24hr: z.string().optional(),
+});
+
+export const publicMarketSummarySchema = publicMarketSchema.pick({
+  id: true,
+  conditionId: true,
+  slug: true,
+  question: true,
+  outcomes: true,
+  outcomePrices: true,
+  clobTokenIds: true,
+  active: true,
+  closed: true,
+  acceptingOrders: true,
+  endDate: true,
+  liquidity: true,
+  volume: true,
+  icon: true,
+  volume24hr: true,
+});
+
+export const publicOutcomeQuoteSchema = z.object({
+  outcome: z.string(),
+  tokenId,
+  price: z.string().nullable(),
+  bestBid: z.string().nullable(),
+  bestAsk: z.string().nullable(),
+  source: z.enum(["order-book", "gamma"]),
+});
+
+export const publicMarketDetailSchema = z.object({
+  market: publicMarketSchema,
+  quotes: z.array(publicOutcomeQuoteSchema),
+  observedAt: z.string().datetime(),
+});
+
+export const publicMarketListResponseSchema = z.object({
+  markets: z.array(publicMarketSummarySchema),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+  observedAt: z.string().datetime(),
+});
+
+export const publicOrderBookLevelSchema = z.object({
+  price: z.string(),
+  size: z.string(),
+});
+
+export const publicOrderBookSchema = z.object({
+  tokenId,
+  minimumOrderSize: z.string(),
+  tickSize: z.string(),
+  negativeRisk: z.boolean(),
+  lastTradePrice: z.string().nullable(),
+  bids: z.array(publicOrderBookLevelSchema),
+  asks: z.array(publicOrderBookLevelSchema),
+  observedAt: z.string().datetime(),
+});
+
+export const publicPriceHistorySchema = z.object({
+  tokenId,
+  interval: z.enum(["1h", "6h", "1d", "1w", "max"]),
+  points: z.array(z.object({ timestamp: z.number(), price: z.string() })),
+  observedAt: z.string().datetime(),
+});
+
 export const paperQuoteRequestSchema = z.object({
   conditionId: z.string().min(1).max(200),
   tokenId,
@@ -649,6 +718,14 @@ export type AccountOverview = z.infer<typeof accountOverviewSchema>;
 export type MarketSearchMarket = z.infer<typeof marketSearchMarketSchema>;
 export type MarketSearchEvent = z.infer<typeof marketSearchEventSchema>;
 export type MarketSearchResponse = z.infer<typeof marketSearchResponseSchema>;
+export type PublicMarket = z.infer<typeof publicMarketSchema>;
+export type PublicMarketSummary = z.infer<typeof publicMarketSummarySchema>;
+export type PublicOutcomeQuote = z.infer<typeof publicOutcomeQuoteSchema>;
+export type PublicMarketDetail = z.infer<typeof publicMarketDetailSchema>;
+export type PublicMarketListResponse = z.infer<typeof publicMarketListResponseSchema>;
+export type PublicOrderBookLevel = z.infer<typeof publicOrderBookLevelSchema>;
+export type PublicOrderBook = z.infer<typeof publicOrderBookSchema>;
+export type PublicPriceHistory = z.infer<typeof publicPriceHistorySchema>;
 export type PaperQuoteRequest = z.infer<typeof paperQuoteRequestSchema>;
 export type PaperOrderRequest = z.infer<typeof paperOrderRequestSchema>;
 export type PaperQuote = z.infer<typeof paperQuoteSchema>;

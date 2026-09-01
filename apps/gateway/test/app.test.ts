@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { parseConfig } from "../src/config.js";
+import { AppError } from "../src/errors.js";
+import { PublicMarketService } from "../src/public-market.js";
+import { TtlCache } from "../src/public-cache.js";
 import type { Principal } from "../src/types.js";
-import { FakePolymarket, MemoryTradingStore } from "./fakes.js";
+import { FakePolymarket, MemoryTradingStore, publicMarketSummaryFixture } from "./fakes.js";
 
 const principal: Principal = {
   id: "assethero:user-1",
@@ -179,7 +182,8 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
   };
   const app = await buildApp({
     config: config(trustedProxies, configOverrides),
-    verifier: { verifyAuthorization: async (_header: string | undefined, scope: string) => {
+    verifier: { verifyAuthorization: async (header: string | undefined, scope: string) => {
+      if (!header) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
       verifiedScopes.push(scope);
       return principal;
     } } as never,
@@ -188,6 +192,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     trading: trading as never,
     paper: paper as never,
     paperStrategy: paperStrategy as never,
+    publicMarkets: new PublicMarketService(polymarket, new TtlCache()),
   });
   await app.ready();
   return {
@@ -196,6 +201,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     createdIntents,
     submittedIntents,
     verifiedScopes,
+    polymarket,
   };
 }
 
@@ -217,6 +223,64 @@ describe("gateway HTTP boundary", () => {
     });
     expect(denied.statusCode).toBe(403);
     expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("serves public market reads without authentication and keeps research routes guarded", async () => {
+    const { app, polymarket } = await setup();
+    polymarket.publicActiveMarkets = [
+      publicMarketSummaryFixture(),
+      publicMarketSummaryFixture({ id: "market-2", conditionId: "0xcondition-2", slug: "other", question: "Other market?" }),
+    ];
+    polymarket.publicMarketDetail = {
+      ...publicMarketSummaryFixture(),
+      description: "Fed policy details",
+      archived: false,
+      restricted: false,
+      enableOrderBook: true,
+      minimumOrderSize: "5",
+      minimumTickSize: "0.01",
+      startDate: null,
+      createdAt: null,
+      closedTime: null,
+      icon: "https://cdn.example.test/icon.png",
+      volume24hr: "1721754.1072",
+    };
+    polymarket.paperOrderBooks.set("123", {
+      bids: [{ price: "0.42", size: "5" }],
+      asks: [{ price: "0.46", size: "5" }],
+      minimumOrderSize: "5",
+      tickSize: "0.01",
+      negativeRisk: false,
+      lastTradePrice: "0.44",
+      observedAt: "2026-08-03T00:00:00.000Z",
+    });
+
+    const browse = await app.inject({ method: "GET", url: "/v1/public/markets" });
+    expect(browse.statusCode).toBe(200);
+    expect(browse.headers["cache-control"]).toContain("public, max-age=30");
+    expect(browse.json().markets.slice(0, 2).map((market: { slug: string }) => market.slug))
+      .toEqual(["fed-rates-september", "other"]);
+
+    const browseAgain = await app.inject({ method: "GET", url: "/v1/public/markets" });
+    expect(browseAgain.statusCode).toBe(200);
+    expect(polymarket.requestCounts.list).toBe(1);
+
+    const detail = await app.inject({ method: "GET", url: "/v1/public/markets/fed-rates-september" });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().quotes).toEqual([
+      { outcome: "Yes", tokenId: "123", price: "0.44", bestBid: "0.42", bestAsk: "0.46", source: "order-book" },
+      { outcome: "No", tokenId: "456", price: "0.565", bestBid: null, bestAsk: null, source: "order-book" },
+    ]);
+
+    const missing = await app.inject({ method: "GET", url: "/v1/public/markets/does-not-exist" });
+    const missingAgain = await app.inject({ method: "GET", url: "/v1/public/markets/does-not-exist" });
+    expect(missing.statusCode).toBe(404);
+    expect(missingAgain.statusCode).toBe(404);
+    expect(polymarket.requestCounts.detail).toBe(2);
+
+    const guarded = await app.inject({ method: "GET", url: "/v1/research/markets?query=election" });
+    expect(guarded.statusCode).toBe(401);
     await app.close();
   });
 
