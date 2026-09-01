@@ -13,6 +13,15 @@ import { fetchPublicTrackRecord } from "./public-api";
 
 vi.mock("./public-api", () => ({ fetchPublicTrackRecord: vi.fn() }));
 
+// CI has no .env.local; TrackRecord.tsx reads env at module scope.
+vi.mock("./env", () => ({
+  env: {
+    VITE_API_URL: "https://api.polytrade.test",
+    VITE_CLERK_PUBLISHABLE_KEY: "pk_test",
+    VITE_CLERK_JWT_TEMPLATE: "polytrade",
+  },
+}));
+
 const record: PublicTrackRecord = {
   profile: { displayName: "Paper account", startedAt: "2026-08-01T00:00:00.000Z" },
   stats: {

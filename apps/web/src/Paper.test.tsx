@@ -9,6 +9,15 @@ import type { GatewayClient } from "./api";
 import { PaperWorkspace } from "./Paper";
 import { ShareCard } from "./TrackRecord";
 
+// CI has no .env.local; ShareCard's module pulls env at import time.
+vi.mock("./env", () => ({
+  env: {
+    VITE_API_URL: "https://api.polytrade.test",
+    VITE_CLERK_PUBLISHABLE_KEY: "pk_test",
+    VITE_CLERK_JWT_TEMPLATE: "polytrade",
+  },
+}));
+
 const portfolio = {
   initialCash: "10000.000000",
   cash: "10000.000000",
