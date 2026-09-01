@@ -12,8 +12,9 @@ import { CredentialCipher } from "../src/crypto.js";
 import { AppError, unauthorized } from "../src/errors.js";
 import { PublicMarketService } from "../src/public-market.js";
 import { TtlCache } from "../src/public-cache.js";
+import { PublicTrackRecordService } from "../src/track-record.js";
 import type { Principal } from "../src/types.js";
-import { FakePolymarket, MemoryAlertStore, MemoryTradingStore, publicMarketSummaryFixture } from "./fakes.js";
+import { FakePolymarket, MemoryAlertStore, MemoryTrackRecordStore, MemoryTradingStore, publicMarketSummaryFixture, trackRecordSnapshotFixture } from "./fakes.js";
 
 const principal: Principal = {
   id: "assethero:user-1",
@@ -195,6 +196,9 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     new CredentialCipher(config(trustedProxies, configOverrides).credentialKey),
     alertSender,
   );
+  const trackRecordStore = new MemoryTrackRecordStore();
+  trackRecordStore.snapshots[principal.id] = trackRecordSnapshotFixture();
+  const trackRecords = new PublicTrackRecordService(trackRecordStore, new TtlCache());
   const app = await buildApp({
     config: config(trustedProxies, configOverrides),
     verifier: { verifyAuthorization: async (header: string | undefined, scope: string) => {
@@ -210,6 +214,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     paperStrategy: paperStrategy as never,
     alerts,
     publicMarkets: new PublicMarketService(polymarket, new TtlCache()),
+    trackRecords,
   });
   await app.ready();
   return {
@@ -222,6 +227,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     verifiedScopes,
     alertStore,
     alertRequests,
+    trackRecordStore,
     polymarket,
   };
 }
@@ -302,6 +308,95 @@ describe("gateway HTTP boundary", () => {
 
     const guarded = await app.inject({ method: "GET", url: "/v1/research/markets?query=election" });
     expect(guarded.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("serves an opt-in track record publicly and keeps share management guarded", async () => {
+    const { app, trackRecordStore } = await setup();
+    const link = await trackRecordStore.enable(principal.id);
+    const token = link.token!;
+
+    const before = trackRecordStore.resolveCount;
+    const record = await app.inject({ method: "GET", url: `/v1/public/track-records/${token}` });
+    expect(record.statusCode).toBe(200);
+    expect(record.headers["cache-control"]).toContain("public, max-age=15");
+    expect(record.json().profile).toEqual({ displayName: "Paper account", startedAt: "2026-08-01T00:00:00.000Z" });
+    expect(record.json().stats.equity).toBe("9505.200000");
+    // The payload is identity-free: no principal id may leak.
+    expect(record.body).not.toContain(principal.id);
+
+    // Repeat visit is served from the in-memory cache, not the store.
+    await app.inject({ method: "GET", url: `/v1/public/track-records/${token}` });
+    expect(trackRecordStore.snapshotCount).toBe(1);
+    expect(trackRecordStore.resolveCount).toBe(before + 1);
+
+    const missing = await app.inject({ method: "GET", url: `/v1/public/track-records/${"x".repeat(32)}` });
+    const missingAgain = await app.inject({ method: "GET", url: `/v1/public/track-records/${"x".repeat(32)}` });
+    expect(missing.statusCode).toBe(404);
+    expect(missingAgain.statusCode).toBe(404);
+
+    const disabled = await trackRecordStore.disable(principal.id);
+    expect(disabled.enabled).toBe(false);
+    expect(await trackRecordStore.resolvePrincipal(token)).toBeNull();
+
+    const manageGuarded = await app.inject({ method: "GET", url: "/v1/paper/share" });
+    expect(manageGuarded.statusCode).toBe(401);
+    const createGuarded = await app.inject({ method: "POST", url: "/v1/paper/share", payload: { rotate: false } });
+    expect(createGuarded.statusCode).toBe(401);
+    const deleteGuarded = await app.inject({ method: "DELETE", url: "/v1/paper/share" });
+    expect(deleteGuarded.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("creates, rotates, and disables a share link for the authenticated owner", async () => {
+    const { app, trackRecordStore } = await setup();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/paper/share",
+      headers: { authorization: "Bearer token", "idempotency-key": "share-create-1" },
+      payload: { rotate: false },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().token).toMatch(/^[A-Za-z0-9_-]{32,64}$/);
+    expect(created.json().enabled).toBe(true);
+
+    // GET needs no Idempotency-Key and reports the same link.
+    const status = await app.inject({
+      method: "GET",
+      url: "/v1/paper/share",
+      headers: { authorization: "Bearer token" },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().token).toBe(created.json().token);
+
+    const rotated = await app.inject({
+      method: "POST",
+      url: "/v1/paper/share",
+      headers: { authorization: "Bearer token", "idempotency-key": "share-rotate-1" },
+      payload: { rotate: true },
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.json().token).not.toBe(created.json().token);
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/paper/share",
+      headers: { authorization: "Bearer token", "idempotency-key": "share-rotate-1" },
+      payload: { rotate: true },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().token).toBe(rotated.json().token);
+
+    const disabled = await app.inject({
+      method: "DELETE",
+      url: "/v1/paper/share",
+      headers: { authorization: "Bearer token", "idempotency-key": "share-disable-1" },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json().enabled).toBe(false);
+    expect(disabled.json().token).toBe(rotated.json().token);
+    expect(trackRecordStore.links.get(principal.id)?.enabled).toBe(false);
     await app.close();
   });
 

@@ -507,7 +507,7 @@ async function insertFill(client: PoolClient, value: FillInsert): Promise<PaperF
   return fillFromRow(result.rows[0] as Record<string, unknown>);
 }
 
-function fillFromRow(row: Record<string, unknown>): PaperFill {
+export function fillFromRow(row: Record<string, unknown>): PaperFill {
   return {
     fillId: String(row.id),
     kind: String(row.kind) as PaperFill["kind"],
@@ -527,6 +527,6 @@ function fillFromRow(row: Record<string, unknown>): PaperFill {
   };
 }
 
-function iso(value: unknown): string {
+export function iso(value: unknown): string {
   return (value instanceof Date ? value : new Date(String(value))).toISOString();
 }

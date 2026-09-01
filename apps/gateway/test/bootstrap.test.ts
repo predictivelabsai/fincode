@@ -46,4 +46,12 @@ describe("empty-database bootstrap", () => {
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_strategy_events/);
     expect(sql).toMatch(/CREATE TRIGGER paper_strategy_events_no_update/);
   });
+
+  it("bootstraps opt-in paper share links keyed to the paper account", async () => {
+    const sql = await readFile(schemaPath, "utf8");
+
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS polytrade\.paper_share_links/);
+    expect(sql).toMatch(/share_token text NOT NULL UNIQUE CHECK \(share_token ~ '\^\[A-Za-z0-9_-\]\{32,64\}\$'\)/);
+    expect(sql).toMatch(/CREATE INDEX IF NOT EXISTS paper_share_links_token_idx/);
+  });
 });

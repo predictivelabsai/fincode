@@ -416,6 +416,74 @@ export const paperFillsResponseSchema = z.object({
   limit: z.number().int().positive(),
 });
 
+export const paperShareStatusSchema = z.object({
+  token: z.string().regex(/^[A-Za-z0-9_-]{32,64}$/).nullable(),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime().nullable(),
+  updatedAt: z.string().datetime().nullable(),
+});
+
+export const paperShareManageRequestSchema = z.object({
+  rotate: z.boolean().default(false),
+});
+
+// Public track-record page: a pseudonymous projection of one paper account.
+// Everything identity-adjacent (principal id, token/condition ids, cost basis)
+// is deliberately dropped so the payload can be served without authentication.
+export const publicTrackRecordStatsSchema = z.object({
+  initialCash: decimalString,
+  cash: decimalString,
+  equity: decimalString,
+  totalPnl: signedDecimalString,
+  realizedPnl: signedDecimalString,
+  unrealizedPnl: signedDecimalString,
+  totalFees: decimalString,
+  tradeCount: z.number().int().nonnegative(),
+  winRate: z.string().nullable(),
+});
+
+export const publicTrackRecordPointSchema = z.object({
+  t: z.string().datetime(),
+  equity: decimalString,
+});
+
+export const publicTrackRecordProfileSchema = z.object({
+  displayName: z.string().min(1).max(80),
+  startedAt: z.string().datetime(),
+});
+
+export const publicTrackRecordPositionSchema = paperPositionSchema.pick({
+  marketQuestion: true,
+  outcome: true,
+  shares: true,
+  averageCost: true,
+  liquidationValue: true,
+  unrealizedPnl: true,
+  markStatus: true,
+});
+
+export const publicTrackRecordFillSchema = paperFillSchema.pick({
+  fillId: true,
+  kind: true,
+  marketQuestion: true,
+  outcome: true,
+  shares: true,
+  averagePrice: true,
+  fee: true,
+  cashEffect: true,
+  realizedPnl: true,
+  createdAt: true,
+});
+
+export const publicTrackRecordSchema = z.object({
+  profile: publicTrackRecordProfileSchema,
+  stats: publicTrackRecordStatsSchema,
+  equityCurve: z.array(publicTrackRecordPointSchema).max(501),
+  positions: z.array(publicTrackRecordPositionSchema).max(100),
+  fills: z.array(publicTrackRecordFillSchema).max(50),
+  observedAt: z.string().datetime(),
+});
+
 export const paperStrategyStartRequestSchema = z.object({
   conditionId: z.string().min(1).max(200),
   tokenId,
@@ -831,6 +899,14 @@ export type PaperStrategyAction = z.infer<typeof paperStrategyActionSchema>;
 export type PaperStrategy = z.infer<typeof paperStrategySchema>;
 export type PaperStrategyEvent = z.infer<typeof paperStrategyEventSchema>;
 export type PaperStrategySnapshot = z.infer<typeof paperStrategySnapshotSchema>;
+export type PaperShareStatus = z.infer<typeof paperShareStatusSchema>;
+export type PaperShareManageRequest = z.infer<typeof paperShareManageRequestSchema>;
+export type PublicTrackRecord = z.infer<typeof publicTrackRecordSchema>;
+export type PublicTrackRecordStats = z.infer<typeof publicTrackRecordStatsSchema>;
+export type PublicTrackRecordPoint = z.infer<typeof publicTrackRecordPointSchema>;
+export type PublicTrackRecordProfile = z.infer<typeof publicTrackRecordProfileSchema>;
+export type PublicTrackRecordPosition = z.infer<typeof publicTrackRecordPositionSchema>;
+export type PublicTrackRecordFill = z.infer<typeof publicTrackRecordFillSchema>;
 export type AlertChannelKind = z.infer<typeof alertChannelKindSchema>;
 export type AlertEventKind = z.infer<typeof alertEventKindSchema>;
 export type AlertChannel = z.infer<typeof alertChannelSchema>;

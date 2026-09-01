@@ -1,7 +1,10 @@
 import type {
   AlertChannelKind,
   AlertEventKind,
+  PaperFill,
+  PaperMarkStatus,
   PaperStrategyAction,
+  PaperShareStatus,
   TypedData,
   CancellationSelector,
   CreateOrderProposal,
@@ -11,7 +14,7 @@ import type {
 } from "@polytrade/contracts";
 import type { OrderResponse } from "@polymarket/clob-client-v2";
 import { hashTypedData, verifyTypedData, type Address, type Hex } from "viem";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
   AlertChannelRecord,
@@ -20,6 +23,11 @@ import type {
 } from "../src/alert-store.js";
 import { notFound } from "../src/errors.js";
 import type { PolymarketPort } from "../src/polymarket.js";
+import type {
+  TrackRecordSnapshot,
+  TrackRecordStore,
+  TrackRecordTotals,
+} from "../src/track-record-store.js";
 import type { IdempotencyClaim, TradingStore } from "../src/store.js";
 import { IDEMPOTENCY_STALE_SECONDS } from "../src/store.js";
 import type {
@@ -535,4 +543,155 @@ function claimedRecord(delivery: StoredAlertDelivery, principalId: string, encry
     createdAt: delivery.createdAt,
     deliveredAt: delivery.deliveredAt,
   };
+}
+
+export function paperFillFixture(overrides: Partial<PaperFill> = {}): PaperFill {
+  return {
+    fillId: randomUUID(),
+    kind: "BUY",
+    conditionId: "0xcondition",
+    tokenId: "123",
+    marketQuestion: "Will the Fed hold rates in September?",
+    outcome: "Yes",
+    shares: "10.000000",
+    averagePrice: "0.500000",
+    grossNotional: "5.000000",
+    feeRate: "0.000000",
+    fee: "0.00000",
+    cashEffect: "-5.000000",
+    realizedPnl: "0.000000",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function trackRecordSnapshotFixture(overrides: {
+  account?: { initialCash?: string; cash?: string };
+  positions?: Array<{
+    marketQuestion: string;
+    outcome: string;
+    shares: string;
+    averageCost: string;
+    liquidationValue: string;
+    unrealizedPnl: string;
+    markStatus: PaperMarkStatus;
+  }>;
+  totals?: Partial<TrackRecordTotals>;
+  recentFills?: PaperFill[];
+  curve?: TrackRecordSnapshot["curve"];
+} = {}): TrackRecordSnapshot {
+  return {
+    profile: { startedAt: "2026-08-01T00:00:00.000Z" },
+    account: {
+      initialCash: "10000.000000",
+      cash: "9500.000000",
+      ...overrides.account,
+    },
+    positions: overrides.positions ?? [
+      {
+        marketQuestion: "Will the Fed hold rates in September?",
+        outcome: "Yes",
+        shares: "10.000000",
+        averageCost: "0.500000",
+        liquidationValue: "5.200000",
+        unrealizedPnl: "0.200000",
+        markStatus: "current",
+      },
+    ],
+    totals: {
+      realizedPnl: "10.000000",
+      totalFees: "1.000000",
+      tradeCount: 2,
+      wins: 1,
+      closed: 1,
+      ...overrides.totals,
+    },
+    recentFills: overrides.recentFills ?? [
+      paperFillFixture({ kind: "SELL", cashEffect: "3.000000", realizedPnl: "10.000000" }),
+      paperFillFixture({ kind: "BUY", cashEffect: "-5.000000" }),
+    ],
+    curve: overrides.curve ?? {
+      totalCashEffect: "-2.000000",
+      fills: [
+        { createdAt: "2026-09-01T00:00:00.000Z", cashEffect: "-5.000000" },
+        { createdAt: "2026-09-01T12:00:00.000Z", cashEffect: "3.000000" },
+      ],
+    },
+  };
+}
+
+interface ShareLinkRow {
+  principalId: string;
+  shareToken: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export class MemoryTrackRecordStore implements TrackRecordStore {
+  readonly links = new Map<string, ShareLinkRow>();
+  snapshots: Record<string, TrackRecordSnapshot> = {};
+  resolveCount = 0;
+  snapshotCount = 0;
+
+  async status(principalId: string): Promise<PaperShareStatus> {
+    const row = this.links.get(principalId);
+    if (!row) return { token: null, enabled: false, createdAt: null, updatedAt: null };
+    return {
+      token: row.shareToken,
+      enabled: row.enabled,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async enable(principalId: string): Promise<PaperShareStatus> {
+    const existing = this.links.get(principalId);
+    const now = "2026-09-02T00:00:00.000Z";
+    this.links.set(principalId, existing
+      ? { ...existing, enabled: true, updatedAt: now }
+      : {
+          principalId,
+          shareToken: randomBytes(24).toString("base64url"),
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+    return this.status(principalId);
+  }
+
+  async rotate(principalId: string): Promise<PaperShareStatus> {
+    const now = "2026-09-02T00:00:00.000Z";
+    const row = this.links.get(principalId);
+    this.links.set(principalId, {
+      principalId,
+      shareToken: randomBytes(24).toString("base64url"),
+      enabled: true,
+      createdAt: row?.createdAt ?? now,
+      updatedAt: now,
+    });
+    return this.status(principalId);
+  }
+
+  async disable(principalId: string): Promise<PaperShareStatus> {
+    const row = this.links.get(principalId);
+    if (row) this.links.set(principalId, { ...row, enabled: false, updatedAt: "2026-09-02T00:00:00.000Z" });
+    return this.status(principalId);
+  }
+
+  async resolvePrincipal(token: string): Promise<string | null> {
+    this.resolveCount += 1;
+    for (const [principalId, row] of this.links) {
+      if (row.shareToken === token && row.enabled) return principalId;
+    }
+    return null;
+  }
+
+  async snapshot(principalId: string): Promise<TrackRecordSnapshot> {
+    this.snapshotCount += 1;
+    const snapshot = this.snapshots[principalId];
+    if (!snapshot) throw notFound("Track record not found");
+    return snapshot;
+  }
 }
