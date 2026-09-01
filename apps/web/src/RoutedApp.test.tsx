@@ -43,6 +43,9 @@ const mocks = vi.hoisted(() => {
     paperOrder: vi.fn(),
     paperPortfolio: vi.fn(),
     paperQuote: vi.fn(),
+    paperShareStatus: vi.fn(async () => ({ token: null, enabled: false, createdAt: null, updatedAt: null })),
+    enablePaperShare: vi.fn(),
+    disablePaperShare: vi.fn(),
     paperStrategy: vi.fn(),
     refreshPaperPortfolio: vi.fn(),
     runAgentTurn: vi.fn(),
@@ -87,6 +90,9 @@ vi.mock("./api", () => ({
     searchMarkets = mocks.searchMarkets;
     paperPortfolio = mocks.paperPortfolio;
     paperQuote = mocks.paperQuote;
+    paperShareStatus = mocks.paperShareStatus;
+    enablePaperShare = mocks.enablePaperShare;
+    disablePaperShare = mocks.disablePaperShare;
     paperStrategy = mocks.paperStrategy;
     paperOrder = mocks.paperOrder;
     refreshPaperPortfolio = mocks.refreshPaperPortfolio;

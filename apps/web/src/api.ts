@@ -12,6 +12,8 @@ import {
   paperOrderResponseSchema,
   paperPortfolioSchema,
   paperQuoteSchema,
+  paperShareManageRequestSchema,
+  paperShareStatusSchema,
   paperStrategySnapshotSchema,
   walletChallengeResponseSchema,
   walletSessionResponseSchema,
@@ -32,6 +34,7 @@ import {
   type PaperPortfolio,
   type PaperQuote,
   type PaperQuoteRequest,
+  type PaperShareStatus,
   type PaperStrategySnapshot,
   type PaperStrategyStartRequest,
   type WalletChallengeRequest,
@@ -151,6 +154,23 @@ export class GatewayClient {
   stopPaperStrategy(): Promise<PaperStrategySnapshot> {
     return this.request("/v1/paper/strategy/stop", { method: "POST" })
       .then((value) => paperStrategySnapshotSchema.parse(value));
+  }
+
+  paperShareStatus(): Promise<PaperShareStatus> {
+    return this.request("/v1/paper/share")
+      .then((value) => paperShareStatusSchema.parse(value));
+  }
+
+  enablePaperShare(rotate = false, idempotencyKey?: string): Promise<PaperShareStatus> {
+    return this.request("/v1/paper/share", {
+      method: "POST",
+      body: JSON.stringify(paperShareManageRequestSchema.parse({ rotate })),
+    }, idempotencyKey).then((value) => paperShareStatusSchema.parse(value));
+  }
+
+  disablePaperShare(idempotencyKey?: string): Promise<PaperShareStatus> {
+    return this.request("/v1/paper/share", { method: "DELETE" }, idempotencyKey)
+      .then((value) => paperShareStatusSchema.parse(value));
   }
 
   listAlertChannels(): Promise<AlertChannelList> {

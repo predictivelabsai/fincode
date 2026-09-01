@@ -18,8 +18,11 @@ import {
   paperPortfolioSchema,
   paperQuoteRequestSchema,
   paperQuoteSchema,
+  paperShareManageRequestSchema,
+  paperShareStatusSchema,
   paperStrategySnapshotSchema,
   paperStrategyStartRequestSchema,
+  publicTrackRecordSchema,
   submitIntentRequestSchema,
   walletChallengeRequestSchema,
   walletSessionRequestSchema,
@@ -45,6 +48,7 @@ import type { PolymarketPort } from "./polymarket.js";
 import { publicPriceHistoryTtlMs, PUBLIC_CACHE_TTL_MS, type PublicMarketService } from "./public-market.js";
 import { registerServiceProxies } from "./proxy.js";
 import type { TradingStore } from "./store.js";
+import { TRACK_RECORD_CACHE_TTL_MS, type PublicTrackRecordService } from "./track-record.js";
 import type { Principal } from "./types.js";
 import type { TradingService } from "./trading.js";
 
@@ -57,6 +61,7 @@ export interface AppDependencies {
   paper: PaperTradingService;
   paperStrategy: PaperStrategyService;
   publicMarkets: PublicMarketService;
+  trackRecords: PublicTrackRecordService;
   paperStrategyRunner?: { close(): Promise<void> };
   alerts: AlertService;
   alertsRunner?: { close(): Promise<void> };
@@ -90,6 +95,7 @@ const publicMarketListQuery = z.object({
 });
 const slugParams = z.object({ slug: z.string().min(1).max(200) });
 const publicHistoryQuery = z.object({ interval: z.enum(["1h", "6h", "1d", "1w", "max"]).default("1d") });
+const trackRecordParams = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{32,64}$/) });
 
 const cacheHeader = (ttlMs: number) => `public, max-age=${Math.max(1, Math.min(60, Math.floor(ttlMs / 1000)))}`;
 
@@ -266,6 +272,17 @@ export async function buildApp(deps: AppDependencies) {
     return deps.publicMarkets.history(tokenId, interval);
   });
 
+  // Public track-record share pages: unauthenticated read-only paper trading
+  // data, addressed by a secret opt-in token instead of the principal.
+  app.get("/v1/public/track-records/:token", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], params: trackRecordParams, response: { 200: publicTrackRecordSchema } },
+  }, async (request, reply) => {
+    const { token } = trackRecordParams.parse(request.params);
+    reply.header("Cache-Control", cacheHeader(TRACK_RECORD_CACHE_TTL_MS.detail));
+    return deps.trackRecords.detail(token);
+  });
+
   app.get("/v1/paper/portfolio", {
     preHandler: authenticate("research"),
     schema: { tags: ["paper"], response: { 200: paperPortfolioSchema } },
@@ -313,6 +330,33 @@ export async function buildApp(deps: AppDependencies) {
     preHandler: authenticate("research"),
     schema: { tags: ["paper"], response: { 200: paperStrategySnapshotSchema } },
   }, (request) => deps.paperStrategy.stop(principal(request)));
+
+  app.get("/v1/paper/share", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["paper"], response: { 200: paperShareStatusSchema } },
+  }, (request) => deps.trackRecords.status(principal(request).id));
+
+  app.post("/v1/paper/share", {
+    preHandler: authenticate("research"),
+    schema: {
+      tags: ["paper"],
+      body: paperShareManageRequestSchema,
+      response: { 200: paperShareStatusSchema },
+    },
+  }, (request) => {
+    const body = paperShareManageRequestSchema.parse(request.body);
+    return body.rotate
+      ? runIdempotent(request, "paper-share.rotate", body, () =>
+          deps.trackRecords.rotate(principal(request).id))
+      : runIdempotent(request, "paper-share.enable", body, () =>
+          deps.trackRecords.enable(principal(request).id));
+  });
+
+  app.delete("/v1/paper/share", {
+    preHandler: authenticate("research"),
+    schema: { tags: ["paper"], response: { 200: paperShareStatusSchema } },
+  }, (request) => runIdempotent(request, "paper-share.disable", {}, () =>
+    deps.trackRecords.disable(principal(request).id)));
 
   app.get("/v1/alerts/channels", {
     preHandler: authenticate("research"),

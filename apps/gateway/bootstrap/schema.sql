@@ -184,6 +184,17 @@ CREATE TRIGGER paper_fills_no_update
 BEFORE UPDATE OR DELETE ON polytrade.paper_fills
 FOR EACH ROW EXECUTE FUNCTION polytrade.prevent_paper_fill_mutation();
 
+CREATE TABLE IF NOT EXISTS polytrade.paper_share_links (
+    principal_id text PRIMARY KEY REFERENCES polytrade.paper_accounts(principal_id) ON DELETE CASCADE,
+    share_token text NOT NULL UNIQUE CHECK (share_token ~ '^[A-Za-z0-9_-]{32,64}$'),
+    enabled boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS paper_share_links_token_idx
+    ON polytrade.paper_share_links (share_token) WHERE enabled;
+
 CREATE TABLE IF NOT EXISTS polytrade.paper_strategies (
     strategy_id uuid PRIMARY KEY,
     principal_id text NOT NULL REFERENCES polytrade.paper_accounts(principal_id) ON DELETE CASCADE,

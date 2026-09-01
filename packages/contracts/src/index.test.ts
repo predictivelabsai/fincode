@@ -16,6 +16,8 @@ import {
   paperOrderRequestSchema,
   paperPortfolioSchema,
   paperQuoteSchema,
+  paperShareStatusSchema,
+  publicTrackRecordSchema,
   paperStrategySnapshotSchema,
   paperStrategyStartRequestSchema,
   tradingActionProposalSchema,
@@ -327,5 +329,98 @@ describe("alert channel contracts", () => {
       createdAt: "2026-09-01T00:00:00.000Z",
       updatedAt: "2026-09-01T00:00:00.000Z",
     }).targetHint).toBe("chat 123456789");
+  });
+});
+
+describe("publicTrackRecordSchema", () => {
+  const position = {
+    conditionId: "0xcondition",
+    tokenId: "123",
+    marketQuestion: "Will the Fed hold rates?",
+    outcome: "Yes",
+    shares: "10.000000",
+    costBasis: "5.000000",
+    averageCost: "0.500000",
+    bestBid: null,
+    liquidationValue: "5.200000",
+    unrealizedPnl: "0.200000",
+    markStatus: "current",
+    markedAt: null,
+  };
+  const fill = {
+    fillId: "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
+    kind: "BUY",
+    conditionId: "0xcondition",
+    tokenId: "123",
+    marketQuestion: "Will the Fed hold rates?",
+    outcome: "Yes",
+    shares: "10.000000",
+    averagePrice: "0.500000",
+    grossNotional: "5.000000",
+    feeRate: "0.000000",
+    fee: "0.000000",
+    cashEffect: "-5.000000",
+    realizedPnl: "0.000000",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    createdAt: "2026-09-01T00:00:00.000Z",
+  };
+  const record = {
+    profile: { displayName: "Paper account", startedAt: "2026-08-01T00:00:00.000Z" },
+    stats: {
+      initialCash: "10000.000000",
+      cash: "9500.000000",
+      equity: "9505.200000",
+      totalPnl: "-494.800000",
+      realizedPnl: "10.000000",
+      unrealizedPnl: "0.200000",
+      totalFees: "1.000000",
+      tradeCount: 2,
+      winRate: "100.00",
+    },
+    equityCurve: [
+      { t: "2026-09-01T00:00:00.000Z", equity: "9497.000000" },
+      { t: "2026-09-01T12:00:00.000Z", equity: "9500.000000" },
+      { t: "2026-09-02T00:00:00.000Z", equity: "9505.200000" },
+    ],
+    positions: [position],
+    fills: [fill],
+    observedAt: "2026-09-02T00:00:00.000Z",
+  };
+
+  it("parses a full public track record", () => {
+    expect(publicTrackRecordSchema.parse(record).stats.winRate).toBe("100.00");
+  });
+
+  it("strips identity-adjacent fields from the projected positions and fills", () => {
+    const parsed = publicTrackRecordSchema.parse(record);
+    expect(Object.keys(parsed.positions[0]!)).not.toContain("conditionId");
+    expect(Object.keys(parsed.positions[0]!)).not.toContain("tokenId");
+    expect(Object.keys(parsed.positions[0]!)).not.toContain("costBasis");
+    expect(Object.keys(parsed.fills[0]!)).not.toContain("conditionId");
+    expect(Object.keys(parsed.fills[0]!)).not.toContain("tokenId");
+    expect(Object.keys(parsed.fills[0]!)).not.toContain("grossNotional");
+    expect(Object.keys(parsed.fills[0]!)).not.toContain("feeRate");
+  });
+
+  it("rejects a null winRate placeholder or oversized curve", () => {
+    expect(publicTrackRecordSchema.safeParse({
+      ...record,
+      equityCurve: Array.from({ length: 502 }, (_, index) => ({
+        t: "2026-09-01T00:00:00.000Z",
+        equity: "9500.000000",
+        index,
+      })),
+    }).success).toBe(false);
+  });
+
+  it("keeps the share token format aligned between status and URL", () => {
+    expect(paperShareStatusSchema.shape.token.safeParse("a".repeat(32)).success).toBe(true);
+    expect(paperShareStatusSchema.shape.token.safeParse("short").success).toBe(false);
+    expect(paperShareStatusSchema.parse({
+      token: null,
+      enabled: false,
+      createdAt: null,
+      updatedAt: null,
+    }).token).toBeNull();
   });
 });

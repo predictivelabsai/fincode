@@ -23,6 +23,7 @@ import {
 
 import { GatewayClient, GatewayError } from "./api";
 import { PaperStrategyRunner } from "./PaperStrategy";
+import { ShareCard } from "./TrackRecord";
 
 const FILL_PAGE_SIZE = 20;
 
@@ -342,6 +343,11 @@ export function PaperWorkspace(props: {
             onSnapshot={setStrategySnapshot}
             onError={props.onError}
             onNotice={props.onNotice}
+          />
+          <ShareCard
+            client={props.client}
+            onNotice={props.onNotice}
+            onError={props.onError}
           />
         </aside>
       </div>
