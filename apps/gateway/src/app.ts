@@ -42,6 +42,7 @@ import { AppError, conflict, forbidden, validation } from "./errors.js";
 import type { PaperStrategyService } from "./paper-strategy.js";
 import type { PaperTradingService } from "./paper.js";
 import type { PolymarketPort } from "./polymarket.js";
+import { publicPriceHistoryTtlMs, PUBLIC_CACHE_TTL_MS, type PublicMarketService } from "./public-market.js";
 import { registerServiceProxies } from "./proxy.js";
 import type { TradingStore } from "./store.js";
 import type { Principal } from "./types.js";
@@ -55,6 +56,7 @@ export interface AppDependencies {
   trading: TradingService;
   paper: PaperTradingService;
   paperStrategy: PaperStrategyService;
+  publicMarkets: PublicMarketService;
   paperStrategyRunner?: { close(): Promise<void> };
   alerts: AlertService;
   alertsRunner?: { close(): Promise<void> };
@@ -81,6 +83,15 @@ const alertChannelParams = z.object({ channelId: z.string().uuid() });
 const alertDeliveriesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+const publicMarketListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(24).default(12),
+  offset: z.coerce.number().int().min(0).max(1_000).default(0),
+  order: z.enum(["volume24hr", "liquidity", "endDate"]).default("volume24hr"),
+});
+const slugParams = z.object({ slug: z.string().min(1).max(200) });
+const publicHistoryQuery = z.object({ interval: z.enum(["1h", "6h", "1d", "1w", "max"]).default("1d") });
+
+const cacheHeader = (ttlMs: number) => `public, max-age=${Math.max(1, Math.min(60, Math.floor(ttlMs / 1000)))}`;
 
 export async function buildApp(deps: AppDependencies) {
   const app = Fastify({
@@ -216,6 +227,43 @@ export async function buildApp(deps: AppDependencies) {
   app.get("/v1/research/trades/:conditionId", { preHandler: authenticate("research"), schema: { tags: ["research"], params: conditionParams } }, (request) => {
     const { conditionId } = conditionParams.parse(request.params);
     return deps.polymarket.getRecentTrades(conditionId);
+  });
+
+  // Public market pages: unauthenticated read-only Polymarket data. Each route
+  // caps its own rate so crawlers cannot exhaust the shared global limit.
+  const publicRouteOptions = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
+  app.get("/v1/public/markets", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], querystring: publicMarketListQuery },
+  }, async (request, reply) => {
+    const query = publicMarketListQuery.parse(request.query);
+    reply.header("Cache-Control", cacheHeader(PUBLIC_CACHE_TTL_MS.index));
+    return deps.publicMarkets.list(query);
+  });
+  app.get("/v1/public/markets/:slug", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], params: slugParams },
+  }, async (request, reply) => {
+    const { slug } = slugParams.parse(request.params);
+    reply.header("Cache-Control", cacheHeader(PUBLIC_CACHE_TTL_MS.market));
+    return deps.publicMarkets.detail(slug);
+  });
+  app.get("/v1/public/order-books/:tokenId", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], params: tokenParams },
+  }, async (request, reply) => {
+    const { tokenId } = tokenParams.parse(request.params);
+    reply.header("Cache-Control", cacheHeader(PUBLIC_CACHE_TTL_MS.book));
+    return deps.publicMarkets.book(tokenId);
+  });
+  app.get("/v1/public/price-history/:tokenId", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], params: tokenParams, querystring: publicHistoryQuery },
+  }, async (request, reply) => {
+    const { tokenId } = tokenParams.parse(request.params);
+    const { interval } = publicHistoryQuery.parse(request.query);
+    reply.header("Cache-Control", cacheHeader(publicPriceHistoryTtlMs(interval)));
+    return deps.publicMarkets.history(tokenId, interval);
   });
 
   app.get("/v1/paper/portfolio", {

@@ -48,7 +48,9 @@ export function PaperWorkspace(props: {
   const [ordering, setOrdering] = useState(false);
   const [orderKey, setOrderKey] = useState<string | null>(null);
   const [strategySnapshot, setStrategySnapshot] = useState<PaperStrategySnapshot | null>(null);
+  const [initialError, setInitialError] = useState<string | null>(null);
   const pollBusyRef = useRef(false);
+  const pollFailedRef = useRef(false);
 
   const loadFills = useCallback(async (offset: number) => {
     try {
@@ -73,24 +75,31 @@ export function PaperWorkspace(props: {
     }
   }, [props.client, props.onError, props.onNotice]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      props.client.refreshPaperPortfolio(),
-      props.client.paperFills(FILL_PAGE_SIZE, 0),
-      props.client.paperStrategy(),
-    ]).then(([nextPortfolio, nextFills, nextStrategy]) => {
-      if (cancelled) return;
+  // The dashboard is shown only after every panel loaded, or with an explicit
+  // failure panel — a null portfolio rendered as "$0.00 equity" would invent
+  // ledger numbers that were never received.
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setInitialError(null);
+    try {
+      const [nextPortfolio, nextFills, nextStrategy] = await Promise.all([
+        props.client.refreshPaperPortfolio(),
+        props.client.paperFills(FILL_PAGE_SIZE, 0),
+        props.client.paperStrategy(),
+      ]);
       setPortfolio(nextPortfolio);
       setFills(nextFills);
       setStrategySnapshot(nextStrategy);
-    }).catch((error: unknown) => {
-      if (!cancelled) props.onError(message(error));
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [props.client, props.onError]);
+    } catch (error) {
+      setInitialError(message(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [props.client]);
+
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,8 +116,14 @@ export function PaperWorkspace(props: {
         setPortfolio(nextPortfolio);
         setStrategySnapshot(nextStrategy);
         if (nextFills) setFills(nextFills);
+        pollFailedRef.current = false;
       } catch {
-        // The next poll retries transient dashboard reads without interrupting an active strategy.
+        // Background refresh: retry on the next tick, but surface the failure
+        // once per episode instead of silently letting the page go stale.
+        if (!cancelled && !pollFailedRef.current) {
+          pollFailedRef.current = true;
+          props.onError("The paper dashboard lost its live updates; still showing the last received data. It will reconnect automatically.");
+        }
       } finally {
         pollBusyRef.current = false;
       }
@@ -118,7 +133,7 @@ export function PaperWorkspace(props: {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [fillOffset, props.client]);
+  }, [fillOffset, props.client, props.onError]);
 
   const selectedOutcome = useMemo(() => {
     if (!selectedMarket) return null;
@@ -212,6 +227,19 @@ export function PaperWorkspace(props: {
 
   if (loading) {
     return <main className="paper-loading"><RefreshCw className="spin" /><span>Opening paper ledger…</span></main>;
+  }
+
+  if (initialError) {
+    return (
+      <main className="paper-loading paper-load-failed" role="alert">
+        <CircleAlert aria-hidden="true" />
+        <div>
+          <strong>Paper ledger could not be loaded</strong>
+          <p>{initialError}</p>
+        </div>
+        <button className="button button-quiet" type="button" onClick={() => void loadDashboard()}>Try again</button>
+      </main>
+    );
   }
 
   return (
@@ -402,12 +430,13 @@ function tone(value: string | null | undefined): string {
 }
 
 function formatMoney(value: string | number | null | undefined): string {
-  const number = Number(value ?? 0);
-  return `${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)} USDC`;
+  if (value === null || value === undefined) return "—";
+  return `${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value))} USDC`;
 }
 
 function formatSignedMoney(value: string | null | undefined): string {
-  const number = Number(value ?? 0);
+  if (value === null || value === undefined) return "—";
+  const number = Number(value);
   const sign = number > 0 ? "+" : "";
   return `${sign}${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)} USDC`;
 }

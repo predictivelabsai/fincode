@@ -12,6 +12,8 @@ import { PostgresPaperStrategyStore } from "./paper-strategy-store.js";
 import { PaperStrategyBackgroundRunner, PaperStrategyService } from "./paper-strategy.js";
 import { PaperTradingService } from "./paper.js";
 import { PolymarketAdapter } from "./polymarket.js";
+import { PublicMarketService } from "./public-market.js";
+import { TtlCache } from "./public-cache.js";
 import { PostgresTradingStore } from "./store.js";
 import { TradingService } from "./trading.js";
 
@@ -32,6 +34,7 @@ const paperStore = new PostgresPaperStore(pool);
 const paper = new PaperTradingService(paperStore, polymarket);
 const paperStrategyStore = new PostgresPaperStrategyStore(pool);
 const paperStrategy = new PaperStrategyService(paperStrategyStore, paper);
+const publicMarkets = new PublicMarketService(polymarket, new TtlCache());
 let reportStrategyError: (error: unknown) => void = () => undefined;
 const paperStrategyRunner = new PaperStrategyBackgroundRunner(paperStrategyStore, paper, {
   onError: (error) => reportStrategyError(error),
@@ -50,6 +53,7 @@ const app = await buildApp({
   trading,
   paper,
   paperStrategy,
+  publicMarkets,
   paperStrategyRunner,
   alerts,
   alertsRunner,

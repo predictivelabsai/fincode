@@ -23,7 +23,7 @@ import { getAddress, hashTypedData, verifyTypedData, type Address, type Hex } fr
 import { z, type ZodType } from "zod";
 
 import type { GatewayConfig } from "./config.js";
-import { unavailable, validation } from "./errors.js";
+import { notFound, unavailable, validation } from "./errors.js";
 import type {
   AccountSnapshot,
   BuiltOrderIntent,
@@ -63,7 +63,9 @@ type ClobMarketMetadata = {
 
 export interface PolymarketPort {
   searchMarkets(query: string, limit: number, state: "active" | "resolved"): Promise<unknown>;
+  listActiveMarkets(input: { limit: number; offset: number; order: "volume24hr" | "liquidity" | "endDate" }): Promise<unknown>;
   getMarket(identifier: string, kind: "id" | "slug"): Promise<unknown>;
+  getPublicMarket(slug: string): Promise<unknown>;
   getMarketByCondition(conditionId: string): Promise<{ market: MarketSearchMarket; observedAt: string }>;
   getOrderBook(tokenId: string): Promise<unknown>;
   getFeeRate(tokenId: string): Promise<string>;
@@ -200,6 +202,28 @@ export class PolymarketAdapter implements PolymarketPort {
     };
   }
 
+  async listActiveMarkets(
+    input: { limit: number; offset: number; order: "volume24hr" | "liquidity" | "endDate" },
+  ): Promise<unknown> {
+    const url = new URL("/markets", this.config.POLYMARKET_GAMMA_URL);
+    url.searchParams.set("active", "true");
+    url.searchParams.set("closed", "false");
+    url.searchParams.set("limit", String(input.limit));
+    url.searchParams.set("offset", String(input.offset));
+    url.searchParams.set("order", input.order);
+    url.searchParams.set("ascending", "false");
+    const raw = await this.fetchJson(url, gammaMarketsResponse);
+    const markets = raw
+      .filter((market) => market.enableOrderBook !== false)
+      .map(normalizePublicMarket)
+      .filter((market) => market.clobTokenIds.length === 2);
+    return {
+      markets,
+      hasMore: raw.length === input.limit,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
   async getMarket(identifier: string, kind: "id" | "slug"): Promise<unknown> {
     const path = kind === "slug" ? `/markets/slug/${encodeURIComponent(identifier)}` : `/markets/${encodeURIComponent(identifier)}`;
     const raw = await this.fetchJson(
@@ -207,6 +231,15 @@ export class PolymarketAdapter implements PolymarketPort {
       gammaMarketResponse,
     );
     return { market: normalizeMarket(raw), observedAt: new Date().toISOString() };
+  }
+
+  async getPublicMarket(slug: string): Promise<unknown> {
+    const raw = await this.fetchJson(
+      new URL(`/markets/slug/${encodeURIComponent(slug)}`, this.config.POLYMARKET_GAMMA_URL),
+      gammaMarketResponse,
+      { notFoundMessage: "Public market not found" },
+    );
+    return { market: normalizePublicMarket(raw), observedAt: new Date().toISOString() };
   }
 
   async getMarketByCondition(conditionId: string): Promise<{ market: MarketSearchMarket; observedAt: string }> {
@@ -505,7 +538,7 @@ export class PolymarketAdapter implements PolymarketPort {
     });
   }
 
-  private async fetchJson<T>(url: URL, schema: ZodType<T>): Promise<T> {
+  private async fetchJson<T>(url: URL, schema: ZodType<T>, options: { notFoundMessage?: string } = {}): Promise<T> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const response = await this.request(url, {
@@ -513,6 +546,9 @@ export class PolymarketAdapter implements PolymarketPort {
           signal: AbortSignal.timeout(this.config.POLYMARKET_REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) {
+          if (response.status === 404 && options.notFoundMessage) {
+            throw notFound(options.notFoundMessage);
+          }
           if ((response.status === 429 || response.status >= 500) && attempt < 2) {
             await delay(100 * (attempt + 1));
             continue;
@@ -682,6 +718,14 @@ function normalizeMarket(raw: Record<string, unknown>) {
     closedTime: normalizeTimestamp(raw.closedTime),
     liquidity: String(raw.liquidity ?? ""),
     volume: String(raw.volume ?? ""),
+  };
+}
+
+function normalizePublicMarket(raw: Record<string, unknown>) {
+  return {
+    ...normalizeMarket(raw),
+    ...(raw.icon ? { icon: String(raw.icon) } : {}),
+    ...(raw.volume24hr !== undefined && raw.volume24hr !== null ? { volume24hr: String(raw.volume24hr) } : {}),
   };
 }
 

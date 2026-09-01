@@ -102,6 +102,7 @@ interface ChatState {
   messages: DeskMessage[];
   loaded: boolean;
   loading: boolean;
+  loadError?: string | null;
   proposalDraft: ProposalDraft | null;
   backtests: AgentBacktestReference[];
 }
@@ -147,7 +148,7 @@ interface WorkspaceContextValue {
   setReviewed: (threadId: string, value: boolean) => void;
   setSignatureType: (value: 0 | 1 | 2 | 3) => void;
   signatureType: 0 | 1 | 2 | 3;
-  submitMessage: (threadId: string | undefined, text: string) => Promise<void>;
+  submitMessage: (threadId: string | undefined, text: string) => Promise<boolean>;
   threads: AgentThreadSummary[];
   threadsLoaded: boolean;
   tradeAllowed: boolean;
@@ -311,7 +312,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     loadingThreadsRef.current.add(threadId);
     setChatStates((current) => {
       const existing = current[threadId] ?? emptyChat();
-      return { ...current, [threadId]: { ...existing, loading: true } };
+      return { ...current, [threadId]: { ...existing, loading: true, loadError: null } };
     });
     try {
       const items = await getAgentThreadItems(env.VITE_API_URL, authentication.getToken, threadId);
@@ -339,16 +340,25 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       loadedThreadsRef.current.add(threadId);
       if (proposal?.kind === "proposal") setLastProposalThreadId(threadId);
     } catch (caught) {
-      setChatStates((current) => ({
-        ...current,
-        [threadId]: { ...(current[threadId] ?? emptyChat()), loading: false, loaded: true },
-      }));
       if (caught instanceof AgentApiError && caught.status === 404) {
+        setChatStates((current) => {
+          const existing = current[threadId] ?? emptyChat();
+          return { ...current, [threadId]: { ...existing, loading: false, loaded: true } };
+        });
         const next = await refreshThreads();
         if (locationRef.current === `/chat/${threadId}`) {
           navigate(next[0] ? `/chat/${next[0].threadId}` : "/chat/new", { replace: true });
         }
       } else {
+        // Keep showing the conversation as unreachable instead of an empty,
+        // "wiped" chat, and leave it retryable.
+        setChatStates((current) => {
+          const existing = current[threadId] ?? emptyChat();
+          return {
+            ...current,
+            [threadId]: { ...existing, loading: false, loaded: false, loadError: errorMessage(caught) },
+          };
+        });
         setMessage(errorMessage(caught));
       }
     } finally {
@@ -356,20 +366,35 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [authentication.getToken, navigate, refreshThreads, setMessage]);
 
-  const submitMessage = useCallback(async (requestedThreadId: string | undefined, text: string) => {
+  const submitMessage = useCallback(async (requestedThreadId: string | undefined, text: string): Promise<boolean> => {
     const message = text.trim();
-    if (!message || activeStreamThreadId) return;
+    if (!message || activeStreamThreadId) return false;
     setError(null);
     setNotice(null);
     setActiveStreamHasText(false);
     setActiveStreamThreadId(requestedThreadId ?? "new");
     let threadId = requestedThreadId;
+    // Mirrors the live thread id for the catch below: `targetThreadId` is
+    // scoped inside the try so the stream handlers capture a plain `string`,
+    // and `onThreadId` is the only place it can change mid-stream.
+    let streamThreadId: string | undefined;
     try {
       if (!threadId) {
-        threadId = await createAgentThread(env.VITE_API_URL, authentication.getToken);
+        try {
+          threadId = await createAgentThread(env.VITE_API_URL, authentication.getToken);
+        } catch (caught) {
+          // The message never reached any thread; the caller restores the
+          // composer text so the user is not forced to retype it.
+          setMessage(errorMessage(caught));
+          await refreshThreads();
+          return false;
+        }
         navigate(`/chat/${threadId}`, { replace: true });
       }
-      let targetThreadId = threadId;
+      // Declared after the null check so the stream handlers below capture a
+      // `string`, not the pre-narrowing `string | undefined`.
+      let targetThreadId: string = threadId;
+      streamThreadId = targetThreadId;
       loadedThreadsRef.current.add(targetThreadId);
       setActiveStreamThreadId(targetThreadId);
       setChatStates((current) => {
@@ -394,6 +419,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
             if (replacement === targetThreadId) return;
             const previous = targetThreadId;
             targetThreadId = replacement;
+            streamThreadId = replacement;
             loadedThreadsRef.current.delete(previous);
             loadedThreadsRef.current.add(replacement);
             setActiveStreamThreadId(replacement);
@@ -453,8 +479,13 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
           },
         },
       });
+      return true;
     } catch (caught) {
       setMessage(errorMessage(caught));
+      // The turn died mid-stream; let the next visit reload the thread from
+      // the server instead of trusting the interrupted local copy forever.
+      if (streamThreadId !== undefined) loadedThreadsRef.current.delete(streamThreadId);
+      return true;
     } finally {
       setActiveStreamThreadId(null);
       setActiveStreamHasText(false);
@@ -801,7 +832,11 @@ function ChatPage({ threadId }: { threadId?: string }) {
     const text = question.trim();
     if (!text || workspace.activeStreamThreadId) return;
     setQuestion("");
-    void workspace.submitMessage(threadId, text);
+    void workspace.submitMessage(threadId, text).then((accepted) => {
+      // A message that never reached any thread (thread creation failed) gives
+      // the user their text back instead of silently discarding it.
+      if (!accepted) setQuestion((current) => current || text);
+    });
   };
   const currentStreaming = Boolean(threadId && workspace.activeStreamThreadId === threadId);
   const awaitingVisibleResponse = currentStreaming && !workspace.activeStreamHasText;
@@ -826,7 +861,22 @@ function ChatPage({ threadId }: { threadId?: string }) {
         </div>
 
         <div className="message-scroll" aria-live="polite">
-          {state.loading ? <PageLoading label="Loading conversation" compact /> : state.messages.length === 0 ? (
+          {state.loading ? <PageLoading label="Loading conversation" compact /> : state.loadError ? (
+            <div className="chat-load-error" role="alert">
+              <CircleAlert aria-hidden="true" />
+              <div>
+                <strong>This conversation could not be loaded</strong>
+                <p>{state.loadError}</p>
+              </div>
+              <button
+                className="button button-quiet"
+                type="button"
+                onClick={() => { if (threadId) void workspace.loadThread(threadId); }}
+              >
+                Try again
+              </button>
+            </div>
+          ) : state.messages.length === 0 ? (
             <div className="chat-empty">
               <span className="empty-orbit" aria-hidden="true"><Zap /></span>
               <h2>Research a market or prepare an action.</h2>
@@ -1136,11 +1186,13 @@ function TradesPage() {
 
 function PaperPage() {
   const workspace = useWorkspace();
+  // Stable identity: PaperWorkspace's poll effect depends on these callbacks.
+  const onNotice = useCallback((message: string) => workspace.setMessage(message, "notice"), [workspace.setMessage]);
   return (
     <PaperWorkspace
       client={workspace.gateway}
       onError={workspace.setMessage}
-      onNotice={(message) => workspace.setMessage(message, "notice")}
+      onNotice={onNotice}
     />
   );
 }
@@ -1266,15 +1318,20 @@ function BacktestsPage() {
   const { runId } = useParams();
   const navigate = useNavigate();
   const workspace = useWorkspace();
+  // Stable props: BacktestsWorkspace's poll effect depends on these callbacks.
+  const onSelectRun = useCallback((id: string) => navigate(id ? `/backtests/${id}` : "/backtests"), [navigate]);
+  const onNewBacktest = useCallback(() => navigate("/backtests/new"), [navigate]);
+  const onAskAgent = useCallback(() => navigate("/chat/new"), [navigate]);
+  const onNotice = useCallback((message: string) => workspace.setMessage(message, "notice"), [workspace.setMessage]);
   return (
     <BacktestsWorkspace
       client={workspace.backtests}
       focusedRunId={runId}
-      onSelectRun={(id) => navigate(`/backtests/${id}`)}
-      onNewBacktest={() => navigate("/backtests/new")}
-      onAskAgent={() => navigate("/chat/new")}
-      onError={(message) => workspace.setMessage(message)}
-      onNotice={(message) => workspace.setMessage(message, "notice")}
+      onSelectRun={onSelectRun}
+      onNewBacktest={onNewBacktest}
+      onAskAgent={onAskAgent}
+      onError={workspace.setMessage}
+      onNotice={onNotice}
     />
   );
 }

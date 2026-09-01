@@ -22,6 +22,12 @@ import type { Principal } from "./types.js";
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_LEASE_MS = 300_000;
 const DEFAULT_BATCH_SIZE = 10;
+// A strategy that keeps hitting transient errors must not write an event row
+// every interval: the retry delay doubles per consecutive failure up to this cap.
+const MAX_RETRY_BACKOFF_SECONDS = 600;
+const DEFAULT_PRUNE_INTERVAL_MS = 6 * 60 * 60_000;
+const DEFAULT_EVENT_RETAIN_PER_STRATEGY = 200;
+const DEFAULT_EVENT_MAX_AGE_DAYS = 30;
 
 export class PaperStrategyService {
   constructor(
@@ -104,9 +110,11 @@ export interface PaperStrategyTradingPort {
 export class PaperStrategyBackgroundRunner {
   private readonly owner = randomUUID();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private pruneTimer: ReturnType<typeof setTimeout> | null = null;
   private closing = false;
   private currentRun: Promise<number> | null = null;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly retryStreaks = new Map<string, number>();
 
   constructor(
     private readonly store: PaperStrategyStore,
@@ -115,6 +123,9 @@ export class PaperStrategyBackgroundRunner {
       pollIntervalMs?: number;
       leaseMs?: number;
       batchSize?: number;
+      pruneIntervalMs?: number;
+      retainEventsPerStrategy?: number;
+      eventMaxAgeDays?: number;
       now?: () => Date;
       onError?: (error: unknown) => void;
     } = {},
@@ -123,12 +134,15 @@ export class PaperStrategyBackgroundRunner {
   start(): void {
     if (this.closing || this.timer) return;
     this.schedule(0);
+    this.schedulePrune(this.options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS);
   }
 
   async close(): Promise<void> {
     this.closing = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    this.pruneTimer = null;
     await Promise.allSettled([
       ...(this.currentRun ? [this.currentRun] : []),
       ...this.inFlight,
@@ -173,6 +187,23 @@ export class PaperStrategyBackgroundRunner {
         .finally(() => this.schedule(this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
     }, delay);
     this.timer.unref?.();
+  }
+
+  // paper_strategy_events grows one row per scan, so without pruning a
+  // long-lived WAIT-every-5s strategy would accumulate ~17k rows per day.
+  private schedulePrune(delay: number): void {
+    if (this.closing || this.pruneTimer) return;
+    this.pruneTimer = setTimeout(() => {
+      this.pruneTimer = null;
+      void this.store
+        .pruneEvents({
+          retainPerStrategy: this.options.retainEventsPerStrategy ?? DEFAULT_EVENT_RETAIN_PER_STRATEGY,
+          maxAgeDays: this.options.eventMaxAgeDays ?? DEFAULT_EVENT_MAX_AGE_DAYS,
+        })
+        .catch((error) => this.options.onError?.(error))
+        .finally(() => this.schedulePrune(this.options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS));
+    }, Math.min(delay, 2_147_000_000));
+    this.pruneTimer.unref?.();
   }
 
   private async processClaim(claim: PaperStrategyClaim): Promise<void> {
@@ -263,13 +294,27 @@ export class PaperStrategyBackgroundRunner {
         price: lastQuote?.averagePrice,
       }, scannedAt);
     } catch (error) {
-      await this.refreshMarks(principal).catch(() => undefined);
-      const message = error instanceof Error ? error.message : "Background strategy scan failed";
-      if (fatalStrategyError(error)) {
-        await this.store.failClaim(claim, message, scannedAt);
-      } else {
-        await this.complete(claim, { action: "ERROR", message: `${message}. The background runner will retry.` }, scannedAt);
+      if (strategyStopError(error)) {
+        this.retryStreaks.delete(claim.strategyId);
+        await this.store.failClaim(claim, stopMessage(error), scannedAt);
+        return;
       }
+      await this.refreshMarks(principal).catch(() => undefined);
+      const message = error instanceof Error && error.message ? error.message : "Background strategy scan failed";
+      const streak = (this.retryStreaks.get(claim.strategyId) ?? 0) + 1;
+      this.retryStreaks.set(claim.strategyId, streak);
+      // Transient failure (moved book, upstream hiccup): retry, but back off so
+      // a persistently failing strategy does not emit an event row per interval.
+      const backoffSeconds = Math.min(
+        claim.intervalSeconds * 2 ** (streak - 1),
+        MAX_RETRY_BACKOFF_SECONDS,
+      );
+      await this.store.completeClaim(
+        claim,
+        { action: "ERROR", message: `${message}. The background runner will retry.` },
+        scannedAt,
+        new Date(scannedAt.getTime() + Math.max(claim.intervalSeconds, backoffSeconds) * 1_000),
+      );
     }
   }
 
@@ -278,6 +323,7 @@ export class PaperStrategyBackgroundRunner {
     result: PaperStrategyScanResult,
     scannedAt: Date,
   ): Promise<boolean> {
+    this.retryStreaks.delete(claim.strategyId);
     return this.store.completeClaim(
       claim,
       result,
@@ -324,12 +370,29 @@ function strategyGuard(claim: PaperStrategyClaim) {
   };
 }
 
-function fatalStrategyError(error: unknown): boolean {
+function strategyStopError(error: unknown): boolean {
   return error instanceof AppError && [
     "PAPER_MARKET_CLOSED",
     "PAPER_STRATEGY_STOPPED",
     "VALIDATION_ERROR",
+    // A scan cannot fix these by retrying: cash only changes when the user
+    // trades or tops up, and a book without depth stays that way until the
+    // market moves. Stop the strategy with a clear message instead of
+    // emitting an identical error row every scan.
+    "PAPER_INSUFFICIENT_CASH",
+    "PAPER_INSUFFICIENT_LIQUIDITY",
   ].includes(error.code);
+}
+
+function stopMessage(error: unknown): string {
+  const detail = error instanceof Error && error.message ? error.message : "The scan could not be completed";
+  if (error instanceof AppError && error.code === "PAPER_INSUFFICIENT_CASH") {
+    return `Stopped: the paper account does not have enough cash for this strategy's orders (${detail}).`;
+  }
+  if (error instanceof AppError && error.code === "PAPER_INSUFFICIENT_LIQUIDITY") {
+    return `Stopped: the order book currently cannot fill orders of this size (${detail}). Reduce shares per order or restart the strategy later.`;
+  }
+  return detail;
 }
 
 function decimal(value: string, label: string): Decimal {

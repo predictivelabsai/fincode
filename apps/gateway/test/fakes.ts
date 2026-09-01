@@ -6,6 +6,8 @@ import type {
   CancellationSelector,
   CreateOrderProposal,
   MarketSearchMarket,
+  PublicMarket,
+  PublicMarketSummary,
 } from "@polytrade/contracts";
 import type { OrderResponse } from "@polymarket/clob-client-v2";
 import { hashTypedData, verifyTypedData, type Address, type Hex } from "viem";
@@ -16,6 +18,7 @@ import type {
   AlertDeliveryRecord,
   AlertStore,
 } from "../src/alert-store.js";
+import { notFound } from "../src/errors.js";
 import type { PolymarketPort } from "../src/polymarket.js";
 import type { IdempotencyClaim, TradingStore } from "../src/store.js";
 import { IDEMPOTENCY_STALE_SECONDS } from "../src/store.js";
@@ -212,13 +215,34 @@ export class FakePolymarket implements PolymarketPort {
   };
   paperOrderBooks = new Map<string, unknown>();
   paperFeeRates = new Map<string, string>();
+  publicActiveMarkets: PublicMarketSummary[] = [];
+  publicMarketDetail: PublicMarket | null = null;
+  requestCounts = { list: 0, detail: 0, orderBook: 0, priceHistory: 0 };
 
   async searchMarkets() { return { events: [] }; }
+  async listActiveMarkets(input: { limit: number; offset: number; order: string }) {
+    this.requestCounts.list += 1;
+    const start = input.offset;
+    const markets = this.publicActiveMarkets.slice(start, start + input.limit);
+    return {
+      markets,
+      hasMore: start + input.limit < this.publicActiveMarkets.length,
+      observedAt: "2026-08-03T00:00:00.000Z",
+    };
+  }
   async getMarket() { return { market: {} }; }
+  async getPublicMarket(slug: string) {
+    this.requestCounts.detail += 1;
+    if (!this.publicMarketDetail || this.publicMarketDetail.slug !== slug) {
+      throw notFound("Public market not found");
+    }
+    return { market: this.publicMarketDetail, observedAt: "2026-08-03T00:00:00.000Z" };
+  }
   async getMarketByCondition() {
     return { market: this.paperMarket, observedAt: "2026-08-03T00:00:00.000Z" };
   }
   async getOrderBook(tokenId: string) {
+    this.requestCounts.orderBook += 1;
     return this.paperOrderBooks.get(tokenId) ?? {
       bids: [],
       asks: [],
@@ -226,7 +250,10 @@ export class FakePolymarket implements PolymarketPort {
     };
   }
   async getFeeRate(tokenId: string) { return this.paperFeeRates.get(tokenId) ?? "0.000000"; }
-  async getPriceHistory() { return { points: [] }; }
+  async getPriceHistory() {
+    this.requestCounts.priceHistory += 1;
+    return { points: [] };
+  }
   async getRecentTrades() { return { trades: [] }; }
   async exchangeL1Credentials(): Promise<ApiKeyCreds> {
     if (this.l1CredentialsError) throw this.l1CredentialsError;
@@ -286,6 +313,25 @@ export class FakePolymarket implements PolymarketPort {
     this.cancellations.push(selector);
     return { canceled: true, selector };
   }
+}
+
+export function publicMarketSummaryFixture(overrides: Partial<PublicMarketSummary> = {}): PublicMarketSummary {
+  return {
+    id: "market-1",
+    conditionId: "0xcondition",
+    slug: "fed-rates-september",
+    question: "Will the Fed hold rates in September?",
+    outcomes: ["Yes", "No"],
+    outcomePrices: ["0.435", "0.565"],
+    clobTokenIds: ["123", "456"],
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    endDate: "2026-09-16T00:00:00.000Z",
+    liquidity: "751367.0807",
+    volume: "17442271.5916",
+    ...overrides,
+  };
 }
 
 export function orderTypedData(maker: Address, tokenId: string, side: "BUY" | "SELL"): TypedData {
