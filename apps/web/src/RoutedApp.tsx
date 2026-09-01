@@ -189,7 +189,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   // non-null token provider even though the context widened to nullable for
   // the public market pages.
   const workspaceToken = useCallback(async () => {
-    const token = await workspaceToken();
+    const token = await authentication.getToken();
     if (!token) throw new GatewayError("Sign in to continue", "UNAUTHENTICATED", 401);
     return token;
   }, [authentication]);
