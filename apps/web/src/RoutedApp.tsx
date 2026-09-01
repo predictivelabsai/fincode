@@ -372,7 +372,10 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     setActiveStreamHasText(false);
     setActiveStreamThreadId(requestedThreadId ?? "new");
     let threadId = requestedThreadId;
-    let targetThreadId = threadId;
+    // Mirrors the live thread id for the catch below: `targetThreadId` is
+    // scoped inside the try so the stream handlers capture a plain `string`,
+    // and `onThreadId` is the only place it can change mid-stream.
+    let streamThreadId: string | undefined;
     try {
       if (!threadId) {
         try {
@@ -386,7 +389,10 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
         }
         navigate(`/chat/${threadId}`, { replace: true });
       }
-      targetThreadId = threadId;
+      // Declared after the null check so the stream handlers below capture a
+      // `string`, not the pre-narrowing `string | undefined`.
+      let targetThreadId: string = threadId;
+      streamThreadId = targetThreadId;
       loadedThreadsRef.current.add(targetThreadId);
       setActiveStreamThreadId(targetThreadId);
       setChatStates((current) => {
@@ -411,6 +417,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
             if (replacement === targetThreadId) return;
             const previous = targetThreadId;
             targetThreadId = replacement;
+            streamThreadId = replacement;
             loadedThreadsRef.current.delete(previous);
             loadedThreadsRef.current.add(replacement);
             setActiveStreamThreadId(replacement);
@@ -475,7 +482,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       setMessage(errorMessage(caught));
       // The turn died mid-stream; let the next visit reload the thread from
       // the server instead of trusting the interrupted local copy forever.
-      loadedThreadsRef.current.delete(targetThreadId);
+      if (streamThreadId !== undefined) loadedThreadsRef.current.delete(streamThreadId);
       return true;
     } finally {
       setActiveStreamThreadId(null);
