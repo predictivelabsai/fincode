@@ -161,6 +161,7 @@ function runnerSetup(value: PaperStrategyClaim, account: PaperPortfolio) {
       failed.push(message);
       return true;
     }),
+    pruneEvents: vi.fn(async () => undefined),
   };
   const paper: PaperStrategyTradingPort = {
     portfolio: vi.fn(async () => account),
@@ -223,6 +224,97 @@ describe("PaperStrategyBackgroundRunner", () => {
     expect(context.completed).toEqual([]);
     expect(context.failed).toEqual(["Market closed"]);
   });
+
+  it("fails a strategy permanently when the account cannot cover the buy", async () => {
+    const context = runnerSetup(claim(), portfolio());
+    vi.mocked(context.paper.quote).mockRejectedValue(
+      new AppError(409, "PAPER_INSUFFICIENT_CASH", "The paper account does not have enough cash for this fill"),
+    );
+
+    await context.runner.runOnce();
+
+    expect(context.completed).toEqual([]);
+    expect(context.failed).toEqual([
+      "Stopped: the paper account does not have enough cash for this strategy's orders (The paper account does not have enough cash for this fill).",
+    ]);
+  });
+
+  it("fails a strategy permanently when the book cannot fill its size", async () => {
+    const context = runnerSetup(claim(), portfolio());
+    vi.mocked(context.paper.quote).mockRejectedValue(
+      new AppError(409, "PAPER_INSUFFICIENT_LIQUIDITY", "The order book cannot fill 10 shares at the price band"),
+    );
+
+    await context.runner.runOnce();
+
+    expect(context.completed).toEqual([]);
+    expect(context.failed[0]).toContain("Stopped: the order book currently cannot fill orders of this size");
+  });
+
+  it("retries transient scan failures with a growing backoff instead of one row per interval", async () => {
+    const context = runnerSetup(claim(), portfolio());
+    vi.mocked(context.paper.quote).mockRejectedValue(
+      new AppError(503, "PAPER_UNAVAILABLE", "Polymarket pricing is temporarily unavailable"),
+    );
+    vi.mocked(context.strategyStore.claimDue).mockImplementation(async () => [claim()]);
+
+    await context.runner.runOnce();
+    await context.runner.runOnce();
+
+    expect(context.failed).toEqual([]);
+    expect(context.completed).toHaveLength(2);
+    expect(context.completed[0]).toMatchObject({ action: "ERROR" });
+    // interval is 15s: the second consecutive failure doubles the retry delay.
+    expect(context.strategyStore.completeClaim).toHaveBeenNthCalledWith(
+      1, expect.anything(), expect.anything(), expect.anything(),
+      new Date(now.getTime() + 15_000),
+    );
+    expect(context.strategyStore.completeClaim).toHaveBeenNthCalledWith(
+      2, expect.anything(), expect.anything(), expect.anything(),
+      new Date(now.getTime() + 30_000),
+    );
+  });
+
+  it("resets the retry backoff after a successful scan", async () => {
+    const context = runnerSetup(claim(), portfolio());
+    vi.mocked(context.strategyStore.claimDue).mockImplementation(async () => [claim()]);
+    let failNext = true;
+    vi.mocked(context.paper.quote).mockImplementation(async () => {
+      if (failNext) throw new AppError(503, "PAPER_UNAVAILABLE", "Polymarket pricing is temporarily unavailable");
+      return quote("BUY", "0.500000");
+    });
+
+    await context.runner.runOnce();
+    failNext = false;
+    await context.runner.runOnce();
+    failNext = true;
+    await context.runner.runOnce();
+
+    // The third scan failed again but as if it were the first: 15s, not 60s.
+    expect(context.strategyStore.completeClaim).toHaveBeenNthCalledWith(
+      3, expect.anything(), expect.anything(), expect.anything(),
+      new Date(now.getTime() + 15_000),
+    );
+  });
+
+  it("prunes strategy event history on the configured cadence", async () => {
+    vi.useFakeTimers();
+    try {
+      const context = runnerSetup(claim(), portfolio());
+      const runner = new PaperStrategyBackgroundRunner(context.strategyStore, context.paper, {
+        now: () => now,
+        pruneIntervalMs: 50,
+        retainEventsPerStrategy: 200,
+        eventMaxAgeDays: 30,
+      });
+      runner.start();
+      await vi.advanceTimersByTimeAsync(80);
+      expect(context.strategyStore.pruneEvents).toHaveBeenCalledWith({ retainPerStrategy: 200, maxAgeDays: 30 });
+      await runner.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("PaperStrategyService", () => {
@@ -236,6 +328,7 @@ describe("PaperStrategyService", () => {
       claimDue: vi.fn(async () => []),
       completeClaim: vi.fn(async () => true),
       failClaim: vi.fn(async () => true),
+      pruneEvents: vi.fn(async () => undefined),
     };
     const paper = {
       strategyTarget: vi.fn(async () => ({
