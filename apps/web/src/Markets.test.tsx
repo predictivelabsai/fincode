@@ -16,6 +16,17 @@ import { MarketDetailWorkspace, MarketsWorkspace } from "./Markets";
 import type { GatewayClient } from "./api";
 import { GatewayError } from "./api";
 
+// Markets.tsx imports ./env at module scope, and env.ts parses import.meta.env
+// eagerly — CI has no .env.local, so the schema must see test values here.
+vi.mock("./env", () => ({
+  env: {
+    VITE_API_URL: "https://api.polytrade.test",
+    VITE_CLERK_PUBLISHABLE_KEY: "pk_test",
+    VITE_CLERK_JWT_TEMPLATE: "polytrade",
+    VITE_PUBLIC_SITE_URL: "https://polytrade.chat",
+  },
+}));
+
 const OBSERVED = "2026-08-30T12:00:00.000Z";
 
 function summary(overrides: Partial<PublicMarketSummary> = {}): PublicMarketSummary {
