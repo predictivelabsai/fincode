@@ -764,4 +764,71 @@ describe("routed workspace", () => {
     await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://api.polytrade.test", expect.any(Function), THREAD_A));
     expect(window.confirm).toHaveBeenCalled();
   });
+
+  it("restores composer text when the first message cannot be saved", async () => {
+    const user = userEvent.setup();
+    mocks.listAgentThreads.mockResolvedValue([]);
+    mocks.createAgentThread.mockRejectedValueOnce(new mocks.GatewayError("Could not reach the agent service", "UPSTREAM", 503));
+    renderRoute("/chat/new");
+
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "Find election liquidity");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Could not reach the agent service")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toHaveValue("Find election liquidity");
+    expect(screen.getByTestId("location")).toHaveTextContent("/chat/new");
+
+    mocks.createAgentThread.mockResolvedValue(THREAD_A);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/chat/${THREAD_A}`));
+    expect(mocks.createAgentThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a retryable error panel when a conversation fails to load", async () => {
+    const user = userEvent.setup();
+    // Fail while the flag is up (not once): the mocked auth token is a new
+    // function each render, which recreates the clients and can re-trigger loads.
+    let failThreadLoad = true;
+    mocks.getAgentThreadItems.mockImplementation(async (...args: Parameters<typeof mocks.getAgentThreadItems>) => {
+      if (failThreadLoad) throw new mocks.GatewayError("Thread service unavailable", "UPSTREAM", 503);
+      return [
+        { kind: "message", id: `${args[2]}-message`, role: "assistant", text: "Election answer" },
+      ];
+    });
+    renderRoute(`/chat/${THREAD_A}`);
+
+    // The toast and the inline panel both echo the error message, so query
+    // the panel by its heading and assert the message appears somewhere.
+    expect(await screen.findByText("This conversation could not be loaded")).toBeInTheDocument();
+    expect(screen.getAllByText("Thread service unavailable").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Election answer")).not.toBeInTheDocument();
+
+    failThreadLoad = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+    expect(screen.queryByText("This conversation could not be loaded")).not.toBeInTheDocument();
+  });
+
+  it("shows a failure panel instead of an empty ledger when the paper dashboard cannot load", async () => {
+    const user = userEvent.setup();
+    let failLedger = true;
+    const failOr = <T,>(fallback: () => Promise<T>) => async () => {
+      if (failLedger) throw new mocks.GatewayError("Ledger unavailable", "UPSTREAM", 503);
+      return fallback();
+    };
+    mocks.refreshPaperPortfolio.mockImplementation(failOr(async () => paperPortfolio));
+    mocks.paperFills.mockImplementation(failOr(async () => ({ items: [], total: 0, limit: 20, offset: 0 })));
+    mocks.paperStrategy.mockImplementation(failOr(async () => ({ strategy: null, events: [] })));
+    mocks.paperPortfolio.mockImplementation(failOr(async () => paperPortfolio));
+    renderRoute("/paper");
+
+    expect(await screen.findByText("Paper ledger could not be loaded")).toBeInTheDocument();
+    expect(screen.getByText("Ledger unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Practice against the live public order book")).not.toBeInTheDocument();
+    expect(mocks.attachWallet).not.toHaveBeenCalled();
+
+    failLedger = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("No wallet, signature, real order, or withdrawable balance.")).toBeInTheDocument();
+  });
 });
