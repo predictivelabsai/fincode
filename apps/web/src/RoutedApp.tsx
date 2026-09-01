@@ -44,6 +44,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import {
   createOrderProposalSchema,
@@ -794,6 +795,40 @@ function ChatPage({ threadId }: { threadId?: string }) {
   useEffect(() => {
     if (threadId) void workspace.loadThread(threadId);
   }, [threadId, workspace.loadThread]);
+
+  // Deep link from a public market page: seed the composer with a research
+  // prompt and auto-submit it once, then drop the query so a refresh of the
+  // thread doesn't file the same question again.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const marketSlug = searchParams.get("market");
+  const seededMarketRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!marketSlug || seededMarketRef.current === marketSlug) return;
+    seededMarketRef.current = marketSlug;
+    let cancelled = false;
+    let completed = false;
+    void workspace.gateway.publicMarket(marketSlug).then((detail) => {
+      completed = true;
+      if (cancelled) return;
+      const prompt = [
+        `Research this Polymarket market: "${detail.market.question}"`,
+        `— slug ${detail.market.slug}, conditionId ${detail.market.conditionId}.`,
+        "Pull live prices, order book depth, and volume/liquidity, then give your read.",
+      ].join(" ");
+      setSearchParams({}, { replace: true });
+      void workspace.submitMessage(threadId, prompt);
+    }).catch(() => {
+      completed = true;
+      if (!cancelled) setQuestion(`Research the Polymarket market ${marketSlug}.`);
+    });
+    return () => {
+      cancelled = true;
+      // StrictMode remounts every effect once in development. Only re-arm the
+      // guard when this attempt never settled, so the remount still seeds
+      // while completed seeds are never filed twice.
+      if (!completed) seededMarketRef.current = null;
+    };
+  }, [marketSlug, setSearchParams, threadId, workspace.gateway, workspace.submitMessage]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });

@@ -175,7 +175,12 @@ describe("MarketDetailWorkspace", () => {
     } as unknown as GatewayClient;
 
     render(
-      <MarketDetailWorkspace client={client} slug="fed-rates-september" onBack={vi.fn()} />,
+      <MarketDetailWorkspace
+        client={client}
+        slug="fed-rates-september"
+        onBack={vi.fn()}
+        onAskAgent={vi.fn()}
+      />,
     );
 
     expect(
@@ -200,7 +205,12 @@ describe("MarketDetailWorkspace", () => {
     } as unknown as GatewayClient;
 
     render(
-      <MarketDetailWorkspace client={client} slug="fed-rates-september" onBack={vi.fn()} />,
+      <MarketDetailWorkspace
+        client={client}
+        slug="fed-rates-september"
+        onBack={vi.fn()}
+        onAskAgent={vi.fn()}
+      />,
     );
     await screen.findByRole("heading", { name: "Will the Fed cut rates in September?" });
 
@@ -222,7 +232,12 @@ describe("MarketDetailWorkspace", () => {
     } as unknown as GatewayClient;
 
     render(
-      <MarketDetailWorkspace client={client} slug="not-a-market" onBack={vi.fn()} />,
+      <MarketDetailWorkspace
+        client={client}
+        slug="not-a-market"
+        onBack={vi.fn()}
+        onAskAgent={vi.fn()}
+      />,
     );
 
     expect(await screen.findByText("Market not found")).toBeInTheDocument();
@@ -237,13 +252,40 @@ describe("MarketDetailWorkspace", () => {
     } as unknown as GatewayClient;
 
     render(
-      <MarketDetailWorkspace client={client} slug="fed-rates-september" onBack={vi.fn()} />,
+      <MarketDetailWorkspace
+        client={client}
+        slug="fed-rates-september"
+        onBack={vi.fn()}
+        onAskAgent={vi.fn()}
+      />,
     );
 
     expect(
       await screen.findByRole("heading", { name: "Will the Fed cut rates in September?" }),
     ).toBeInTheDocument();
     expect(screen.getByText("The order book is empty right now.")).toBeInTheDocument();
+  });
+
+  it("hands the market to the agent on Ask the agent", async () => {
+    const onAskAgent = vi.fn();
+    const client = {
+      publicMarket: vi.fn().mockResolvedValue(detail()),
+      publicOrderBook: vi.fn().mockResolvedValue(book()),
+      publicPriceHistory: vi.fn().mockResolvedValue(history()),
+    } as unknown as GatewayClient;
+
+    render(
+      <MarketDetailWorkspace
+        client={client}
+        slug="fed-rates-september"
+        onBack={vi.fn()}
+        onAskAgent={onAskAgent}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Will the Fed cut rates in September?" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask the agent" }));
+    expect(onAskAgent).toHaveBeenCalledWith("fed-rates-september");
   });
 
   it("updates the document title for sharing and tabs", async () => {
@@ -254,7 +296,12 @@ describe("MarketDetailWorkspace", () => {
     } as unknown as GatewayClient;
 
     render(
-      <MarketDetailWorkspace client={client} slug="fed-rates-september" onBack={vi.fn()} />,
+      <MarketDetailWorkspace
+        client={client}
+        slug="fed-rates-september"
+        onBack={vi.fn()}
+        onAskAgent={vi.fn()}
+      />,
     );
     await screen.findByRole("heading", { name: "Will the Fed cut rates in September?" });
 
