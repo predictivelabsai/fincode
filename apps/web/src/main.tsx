@@ -10,8 +10,10 @@ const root = createRoot(document.getElementById("root")!);
 
 root.render(
   <StrictMode>
-    <StandaloneAuthentication>
-      <BrowserRouter><App /></BrowserRouter>
-    </StandaloneAuthentication>
+    <BrowserRouter>
+      <StandaloneAuthentication>
+        <App />
+      </StandaloneAuthentication>
+    </BrowserRouter>
   </StrictMode>,
 );

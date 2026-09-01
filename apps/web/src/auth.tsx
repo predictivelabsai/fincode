@@ -5,7 +5,7 @@ import {
 } from "react";
 
 export interface Authentication {
-  getToken: () => Promise<string>;
+  getToken: () => Promise<string | null>;
   accountControl?: ReactNode;
 }
 
