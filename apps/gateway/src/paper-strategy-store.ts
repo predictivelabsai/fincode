@@ -51,6 +51,8 @@ export interface PaperStrategyStore {
   claimDue(owner: string, now: Date, leaseUntil: Date, limit: number): Promise<PaperStrategyClaim[]>;
   completeClaim(claim: PaperStrategyClaim, result: PaperStrategyScanResult, scannedAt: Date, nextScanAt: Date): Promise<boolean>;
   failClaim(claim: PaperStrategyClaim, message: string, failedAt: Date): Promise<boolean>;
+  /** Bound strategy event history: keep the newest rows per strategy and drop rows older than maxAgeDays. */
+  pruneEvents(options: { retainPerStrategy: number; maxAgeDays: number }): Promise<void>;
 }
 
 export class PostgresPaperStrategyStore implements PaperStrategyStore {
@@ -280,6 +282,22 @@ export class PostgresPaperStrategyStore implements PaperStrategyStore {
     } finally {
       client.release();
     }
+  }
+
+  async pruneEvents({ retainPerStrategy, maxAgeDays }: { retainPerStrategy: number; maxAgeDays: number }): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM polytrade.paper_strategy_events
+       WHERE created_at < now() - make_interval(days => $2::int)
+          OR event_id IN (
+            SELECT event_id FROM (
+              SELECT event_id,
+                     row_number() OVER (PARTITION BY strategy_id ORDER BY created_at DESC, event_id DESC) AS position
+              FROM polytrade.paper_strategy_events
+            ) ranked
+            WHERE ranked.position > $1::int
+          )`,
+      [retainPerStrategy, maxAgeDays],
+    );
   }
 }
 

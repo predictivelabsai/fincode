@@ -78,6 +78,28 @@ integration("PostgresPaperStrategyStore", () => {
     expect((await paperStore.portfolio(principalId)).cash).toBe("10000.000000");
     expect((await store.snapshot(principalId)).strategy?.status).toBe("STOPPED");
   });
+
+  it("prunes event history but always keeps the newest rows per strategy", async () => {
+    const principalId = `strategy-prune:${randomUUID()}`;
+    await store.start(startInput(principalId, "prune-key-1"));
+    const claimTime = new Date(startedAt.getTime() + 1_000);
+    for (let index = 0; index < 4; index++) {
+      const claim = (await store.claimDue("runner-prune", new Date(claimTime.getTime() + index * 1_000),
+        new Date(claimTime.getTime() + (index + 1) * 60_000), 1))[0]!;
+      expect(await store.completeClaim(claim, {
+        action: "WAIT",
+        message: `Scan ${index + 1}.`,
+      }, new Date(claimTime.getTime() + index * 1_000),
+        new Date(claimTime.getTime() + (index + 1) * 16_000))).toBe(true);
+    }
+
+    // Keep the newest 2 per strategy; everything else (older than 30 days) goes.
+    await store.pruneEvents({ retainPerStrategy: 2, maxAgeDays: 30 });
+    const afterPrune = await store.snapshot(principalId);
+    const waitEvents = afterPrune.events.filter((event) => event.action === "WAIT");
+    expect(waitEvents).toHaveLength(2);
+    expect(waitEvents.map((event) => event.message).sort()).toEqual(["Scan 3.", "Scan 4."].sort());
+  });
 });
 
 function startInput(principalId: string, key: string): PaperStrategyStartInput {
