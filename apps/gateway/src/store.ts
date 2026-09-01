@@ -9,6 +9,7 @@ export interface TradingStore {
   close(): Promise<void>;
   createChallenge(challenge: ChallengeRecord): Promise<void>;
   consumeChallenge(id: string, principalId: string, now: Date): Promise<ChallengeRecord | undefined>;
+  releaseChallenge(id: string, principalId: string, usedAt: Date): Promise<boolean>;
   createSession(session: WalletSessionRecord): Promise<void>;
   getSession(id: string, principalId: string, now: Date, idleSeconds: number): Promise<WalletSessionRecord | undefined>;
   getLatestSession(principalId: string, now: Date, idleSeconds: number): Promise<WalletSessionRecord | undefined>;
@@ -35,6 +36,7 @@ export interface TradingStore {
     key: string,
     response: unknown,
   ): Promise<void>;
+  releaseIdempotency(principalId: string, operation: string, key: string): Promise<boolean>;
   mirrorAccount(principalId: string, account: AccountSnapshot): Promise<void>;
   appendAudit(principalId: string, action: string, entityId?: string, detail?: unknown): Promise<void>;
 }
@@ -44,6 +46,14 @@ export type IdempotencyClaim =
   | { state: "pending" }
   | { state: "mismatch" }
   | { state: "complete"; response: unknown };
+
+/**
+ * How long an unsettled (or pinned-failure) idempotency row stays
+ * authoritative. Gateway operations complete in seconds, so a row this age
+ * means the request died before it could finish — the claim is stale and the
+ * key becomes re-claimable instead of 409-ing forever.
+ */
+export const IDEMPOTENCY_STALE_SECONDS = 300;
 
 const challengeFromRow = (row: Record<string, unknown>): ChallengeRecord => ({
   id: String(row.id),
@@ -120,6 +130,16 @@ export class PostgresTradingStore implements TradingStore {
       [id, principalId, now],
     );
     return result.rows[0] ? challengeFromRow(result.rows[0]) : undefined;
+  }
+
+  /** Undo a consume when the session could not be created upstream (e.g. the CLOB is down). */
+  async releaseChallenge(id: string, principalId: string, usedAt: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE polytrade.wallet_challenges SET used_at=NULL
+       WHERE id=$1 AND principal_id=$2 AND used_at=$3`,
+      [id, principalId, usedAt],
+    );
+    return (result.rowCount ?? 0) === 1;
   }
 
   async createSession(value: WalletSessionRecord): Promise<void> {
@@ -255,9 +275,13 @@ export class PostgresTradingStore implements TradingStore {
       `INSERT INTO polytrade.idempotency_records
        (principal_id, operation, idempotency_key, request_hash)
        VALUES ($1,$2,$3,$4)
-       ON CONFLICT DO NOTHING
+       ON CONFLICT (principal_id, operation, idempotency_key) DO UPDATE
+       SET request_hash=EXCLUDED.request_hash, response=NULL, created_at=now()
+       WHERE polytrade.idempotency_records.created_at < now() - make_interval(secs => $5::int)
+         AND (polytrade.idempotency_records.response IS NULL
+              OR polytrade.idempotency_records.response->>'ok' = 'false')
        RETURNING principal_id`,
-      [principalId, operation, key, requestHash],
+      [principalId, operation, key, requestHash, IDEMPOTENCY_STALE_SECONDS],
     );
     if ((inserted.rowCount ?? 0) === 1) return { state: "claimed" };
 
@@ -283,6 +307,20 @@ export class PostgresTradingStore implements TradingStore {
        WHERE principal_id=$1 AND operation=$2 AND idempotency_key=$3 AND response IS NULL`,
       [principalId, operation, key, response],
     );
+  }
+
+  /** Release an unsettled claim so the caller's retry re-executes instead of 409-ing forever. */
+  async releaseIdempotency(
+    principalId: string,
+    operation: string,
+    key: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `DELETE FROM polytrade.idempotency_records
+       WHERE principal_id=$1 AND operation=$2 AND idempotency_key=$3 AND response IS NULL`,
+      [principalId, operation, key],
+    );
+    return (result.rowCount ?? 0) === 1;
   }
 
   async mirrorAccount(principalId: string, account: AccountSnapshot): Promise<void> {
