@@ -1,12 +1,21 @@
 import type {
+  AlertChannelKind,
+  AlertEventKind,
+  PaperStrategyAction,
+  TypedData,
   CancellationSelector,
   CreateOrderProposal,
   MarketSearchMarket,
-  TypedData,
 } from "@polytrade/contracts";
 import type { OrderResponse } from "@polymarket/clob-client-v2";
 import { hashTypedData, verifyTypedData, type Address, type Hex } from "viem";
+import { randomUUID } from "node:crypto";
 
+import type {
+  AlertChannelRecord,
+  AlertDeliveryRecord,
+  AlertStore,
+} from "../src/alert-store.js";
 import type { PolymarketPort } from "../src/polymarket.js";
 import type { IdempotencyClaim, TradingStore } from "../src/store.js";
 import type {
@@ -269,5 +278,188 @@ export function orderTypedData(maker: Address, tokenId: string, side: "BUY" | "S
     },
     primaryType: "Order",
     message: { maker, tokenId, side },
+  };
+}
+
+export interface MemoryAlertEvent {
+  eventSeq: number;
+  eventId: string;
+  strategyId: string;
+  action: PaperStrategyAction;
+  message: string;
+  side: "BUY" | "SELL" | null;
+  price: string | null;
+  principalId: string;
+  marketQuestion: string;
+  outcome: string;
+}
+
+interface StoredAlertDelivery extends AlertDeliveryRecord {
+  ownerPrincipalId: string;
+  target: string;
+  nextAttemptAtMs: number;
+  leaseOwner: string | null;
+  leaseUntilMs: number | null;
+  exhaustedAtMs?: number;
+}
+
+export class MemoryAlertStore implements AlertStore {
+  readonly channels = new Map<string, AlertChannelRecord>();
+  readonly deliveries = new Map<string, StoredAlertDelivery>();
+  /** Tests push paper-strategy events here; fanOutNewEvents drains them by seq. */
+  readonly events: MemoryAlertEvent[] = [];
+  private cursor = 0;
+
+  async listChannels(principalId: string): Promise<AlertChannelRecord[]> {
+    return [...this.channels.values()]
+      .filter((channel) => channel.principalId === principalId)
+      .map((channel) => ({ ...channel, eventKinds: [...channel.eventKinds] }));
+  }
+
+  async getChannel(principalId: string, channelId: string): Promise<AlertChannelRecord | undefined> {
+    const channel = this.channels.get(channelId);
+    return channel?.principalId === principalId ? { ...channel, eventKinds: [...channel.eventKinds] } : undefined;
+  }
+
+  async countChannels(principalId: string): Promise<number> {
+    return (await this.listChannels(principalId)).length;
+  }
+
+  async createChannel(channel: AlertChannelRecord): Promise<void> {
+    this.channels.set(channel.channelId, { ...channel, eventKinds: [...channel.eventKinds] });
+  }
+
+  async deleteChannel(principalId: string, channelId: string): Promise<boolean> {
+    const channel = await this.getChannel(principalId, channelId);
+    if (!channel) return false;
+    this.channels.delete(channelId);
+    for (const [deliveryId, delivery] of this.deliveries) {
+      if (delivery.channelId === channelId) this.deliveries.delete(deliveryId);
+    }
+    return true;
+  }
+
+  async fanOutNewEvents(now: Date, limit: number): Promise<number> {
+    const pending = this.events
+      .filter((event) => event.eventSeq > this.cursor && event.action !== "WAIT")
+      .sort((left, right) => left.eventSeq - right.eventSeq)
+      .slice(0, limit);
+    for (const event of pending) {
+      for (const channel of this.channels.values()) {
+        if (channel.principalId !== event.principalId || !channel.enabled) continue;
+        if (!channel.eventKinds.includes(event.action as AlertEventKind)) continue;
+        const deliveryId = randomUUID();
+        this.deliveries.set(deliveryId, {
+          deliveryId,
+          channelId: channel.channelId,
+          ownerPrincipalId: channel.principalId,
+          channelLabel: channel.label,
+          channelKind: channel.kind,
+          target: channel.encryptedTarget,
+          eventSeq: event.eventSeq,
+          action: event.action,
+          message: event.message,
+          context: {
+            marketQuestion: event.marketQuestion,
+            outcome: event.outcome,
+            side: event.side,
+            price: event.price,
+          },
+          status: "pending",
+          attempts: 0,
+          maxAttempts: 5,
+          lastError: null,
+          createdAt: now.toISOString(),
+          deliveredAt: null,
+          nextAttemptAtMs: now.getTime(),
+          leaseOwner: null,
+          leaseUntilMs: null,
+        });
+      }
+      this.cursor = event.eventSeq;
+    }
+    return pending.length;
+  }
+
+  async claimDeliveries(owner: string, now: Date, leaseUntil: Date, limit: number): Promise<AlertDeliveryRecord[]> {
+    const due = [...this.deliveries.values()]
+      .filter((delivery) => delivery.status === "pending"
+        && delivery.nextAttemptAtMs <= now.getTime()
+        && (delivery.leaseUntilMs === null || delivery.leaseUntilMs <= now.getTime()))
+      .sort((left, right) => left.nextAttemptAtMs - right.nextAttemptAtMs)
+      .slice(0, limit);
+    for (const delivery of due) {
+      delivery.attempts += 1;
+      delivery.leaseOwner = owner;
+      delivery.leaseUntilMs = leaseUntil.getTime();
+    }
+    return due.map((delivery) => claimedRecord(delivery, delivery.ownerPrincipalId, delivery.target));
+  }
+
+  async markDelivered(deliveryId: string, owner: string, deliveredAt: Date): Promise<boolean> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery || delivery.leaseOwner !== owner || delivery.status !== "pending") return false;
+    delivery.status = "delivered";
+    delivery.deliveredAt = deliveredAt.toISOString();
+    delivery.leaseOwner = null;
+    delivery.leaseUntilMs = null;
+    return true;
+  }
+
+  async markRetry(deliveryId: string, owner: string, error: string, nextAttemptAt: Date, _now: Date): Promise<boolean> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery || delivery.leaseOwner !== owner || delivery.status !== "pending") return false;
+    delivery.lastError = error;
+    delivery.nextAttemptAtMs = nextAttemptAt.getTime();
+    delivery.leaseOwner = null;
+    delivery.leaseUntilMs = null;
+    return true;
+  }
+
+  async markExhausted(deliveryId: string, owner: string, error: string, now: Date): Promise<boolean> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery || delivery.leaseOwner !== owner || delivery.status !== "pending") return false;
+    delivery.status = "failed";
+    delivery.lastError = error;
+    delivery.leaseOwner = null;
+    delivery.leaseUntilMs = null;
+    delivery.exhaustedAtMs = now.getTime();
+    return true;
+  }
+
+  async listDeliveries(principalId: string, limit: number): Promise<AlertDeliveryRecord[]> {
+    return [...this.deliveries.values()]
+      .filter((delivery) => this.channels.get(delivery.channelId)?.principalId === principalId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, limit)
+      .map((delivery) => claimedRecord(delivery, delivery.ownerPrincipalId, null));
+  }
+
+  async pruneDeliveries(now: Date, olderThanDays: number): Promise<void> {
+    const cutoff = now.getTime() - olderThanDays * 86_400_000;
+    for (const [deliveryId, delivery] of this.deliveries) {
+      if (delivery.status !== "pending" && Date.parse(delivery.createdAt) < cutoff) this.deliveries.delete(deliveryId);
+    }
+  }
+}
+
+function claimedRecord(delivery: StoredAlertDelivery, principalId: string, encryptedTarget: string | null): AlertDeliveryRecord {
+  return {
+    deliveryId: delivery.deliveryId,
+    channelId: delivery.channelId,
+    principalId,
+    channelLabel: delivery.channelLabel,
+    channelKind: delivery.channelKind,
+    ...(encryptedTarget === null ? {} : { encryptedTarget }),
+    eventSeq: delivery.eventSeq,
+    action: delivery.action,
+    message: delivery.message,
+    context: { ...delivery.context },
+    status: delivery.status,
+    attempts: delivery.attempts,
+    maxAttempts: delivery.maxAttempts,
+    lastError: delivery.lastError,
+    createdAt: delivery.createdAt,
+    deliveredAt: delivery.deliveredAt,
   };
 }

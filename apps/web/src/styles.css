@@ -2695,6 +2695,164 @@ th small {
   padding: 18px;
 }
 
+.alerts-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.alerts-channel-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+  list-style: none;
+}
+
+.alerts-channel {
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.alerts-channel-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.alerts-target-hint {
+  overflow-wrap: anywhere;
+  color: var(--faint);
+  font: 0.58rem var(--mono);
+}
+
+.alerts-channel-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.alerts-channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.alerts-add-form h3 {
+  margin: 4px 0 2px;
+  font-size: 0.78rem;
+}
+
+.alerts-kind-picker {
+  margin: 0;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.alerts-kind-picker legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.alerts-kind-chip {
+  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.58rem;
+  cursor: pointer;
+}
+
+.alerts-kind-chip input {
+  margin: 0 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.alerts-kind-on {
+  border-color: rgba(52, 211, 153, 0.3);
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.alerts-form-hint,
+.alerts-form-error {
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.62rem;
+}
+
+.alerts-form-error {
+  color: var(--danger);
+}
+
+.alerts-deliveries > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.alerts-deliveries > div span {
+  font-size: 0.72rem;
+  font-weight: 640;
+}
+
+.alerts-deliveries > div small {
+  color: var(--faint);
+  font-size: 0.58rem;
+}
+
+.alerts-deliveries ol {
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  list-style: none;
+}
+
+.alerts-deliveries li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 7px;
+  font-size: 0.66rem;
+}
+
+.alerts-deliveries time {
+  color: var(--faint);
+  font: 0.55rem var(--mono);
+  white-space: nowrap;
+}
+
+.alerts-delivery-channel {
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.alerts-delivery-message {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+
+.alerts-deliveries li.failed {
+  border-left: 2px solid var(--danger);
+  padding-left: 8px;
+}
+
 .settings-card-heading {
   margin-bottom: 18px;
   display: flex;

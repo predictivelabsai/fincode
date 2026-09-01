@@ -34,6 +34,11 @@ const mocks = vi.hoisted(() => {
     deleteAgentThread: vi.fn(),
     getAgentThreadItems: vi.fn(),
     listAgentThreads: vi.fn(),
+    listAlertChannels: vi.fn(),
+    listAlertDeliveries: vi.fn(),
+    createAlertChannel: vi.fn(),
+    deleteAlertChannel: vi.fn(),
+    testAlertChannel: vi.fn(),
     paperFills: vi.fn(),
     paperOrder: vi.fn(),
     paperPortfolio: vi.fn(),
@@ -88,6 +93,11 @@ vi.mock("./api", () => ({
     paperFills = mocks.paperFills;
     startPaperStrategy = mocks.startPaperStrategy;
     stopPaperStrategy = mocks.stopPaperStrategy;
+    listAlertChannels = mocks.listAlertChannels;
+    createAlertChannel = mocks.createAlertChannel;
+    deleteAlertChannel = mocks.deleteAlertChannel;
+    testAlertChannel = mocks.testAlertChannel;
+    listAlertDeliveries = mocks.listAlertDeliveries;
     createChallenge = vi.fn();
     createWalletSession = vi.fn();
     revokeWalletSession = vi.fn();
@@ -323,6 +333,8 @@ beforeEach(() => {
   mocks.paperQuote.mockResolvedValue(paperQuote);
   mocks.paperOrder.mockResolvedValue({ fill: paperFill, portfolio: paperPortfolio });
   mocks.paperStrategy.mockResolvedValue({ strategy: null, events: [] });
+  mocks.listAlertChannels.mockResolvedValue({ items: [] });
+  mocks.listAlertDeliveries.mockResolvedValue({ items: [], limit: 20 });
   mocks.startPaperStrategy.mockImplementation(async () => {
     mocks.paperStrategy.mockResolvedValue(runningPaperStrategy);
     return runningPaperStrategy;
@@ -559,6 +571,45 @@ describe("routed workspace", () => {
     expect((await screen.findByText("Browser IP check")).parentElement).toHaveTextContent("Research only");
     expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeDisabled();
     expect(screen.getByText(/New orders are unavailable in AU/i)).toBeInTheDocument();
+  });
+
+  it("renders the strategy alerts card with channels and recent deliveries", async () => {
+    mocks.listAlertChannels.mockResolvedValue({
+      items: [{
+        channelId: "77777777-7777-4777-8777-777777777777",
+        kind: "discord",
+        label: "Trading Discord",
+        eventKinds: ["BUY", "SELL", "ERROR"],
+        enabled: true,
+        targetHint: "discord.com/api/webhooks/…ghij",
+        createdAt: "2026-08-04T00:00:00.000Z",
+        updatedAt: "2026-08-04T00:00:00.000Z",
+      }],
+    });
+    mocks.listAlertDeliveries.mockResolvedValue({
+      items: [{
+        deliveryId: "88888888-8888-4888-8888-888888888888",
+        channelId: "77777777-7777-4777-8777-777777777777",
+        channelLabel: "Trading Discord",
+        channelKind: "discord",
+        action: "BUY",
+        message: "Bought 10 shares",
+        context: { marketQuestion: null, outcome: null, side: "BUY", price: "0.42" },
+        status: "delivered",
+        attempts: 1,
+        lastError: null,
+        createdAt: "2026-08-04T00:01:00.000Z",
+        deliveredAt: "2026-08-04T00:01:01.000Z",
+      }],
+      limit: 20,
+    });
+
+    renderRoute("/settings");
+
+    expect(await screen.findByText("Strategy alerts")).toBeInTheDocument();
+    expect((await screen.findAllByText("Trading Discord")).length).toBeGreaterThan(0);
+    expect(screen.getByText("discord.com/api/webhooks/…ghij")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Send test/i })).toBeEnabled();
   });
 
   it("opens the isolated paper ledger and completes a preview-confirm fill", async () => {

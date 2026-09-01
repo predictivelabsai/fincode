@@ -1,5 +1,8 @@
 import pg from "pg";
 
+import { AlertSender } from "./alert-sender.js";
+import { AlertDeliveryRunner, AlertService } from "./alert-service.js";
+import { PostgresAlertStore } from "./alert-store.js";
 import { createJwtVerifier } from "./auth.js";
 import { buildApp } from "./app.js";
 import { parseConfig } from "./config.js";
@@ -33,6 +36,12 @@ let reportStrategyError: (error: unknown) => void = () => undefined;
 const paperStrategyRunner = new PaperStrategyBackgroundRunner(paperStrategyStore, paper, {
   onError: (error) => reportStrategyError(error),
 });
+const alertStore = new PostgresAlertStore(pool);
+const alerts = new AlertService(alertStore, cipher, new AlertSender(config));
+let reportAlertError: (error: unknown) => void = () => undefined;
+const alertsRunner = new AlertDeliveryRunner(alerts, {
+  onError: (error) => reportAlertError(error),
+});
 const app = await buildApp({
   config,
   verifier: createJwtVerifier(config),
@@ -42,9 +51,13 @@ const app = await buildApp({
   paper,
   paperStrategy,
   paperStrategyRunner,
+  alerts,
+  alertsRunner,
 });
 reportStrategyError = (error) => app.log.error({ err: error }, "paper strategy runner failed");
+reportAlertError = (error) => app.log.error({ err: error }, "alert delivery runner failed");
 paperStrategyRunner.start();
+alertsRunner.start();
 
 let shuttingDown = false;
 const shutdown = async (signal: string) => {

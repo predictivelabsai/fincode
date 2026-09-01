@@ -53,6 +53,8 @@ const envSchema = z.object({
   WALLET_SESSION_IDLE_SECONDS: z.coerce.number().int().min(300).max(3_600).default(1_800),
   WALLET_SESSION_MAX_SECONDS: z.coerce.number().int().min(1_800).max(86_400).default(28_800),
   ORDER_INTENT_TTL_SECONDS: z.coerce.number().int().min(30).max(300).default(120),
+  TELEGRAM_BOT_TOKEN: z.string().min(10).optional(),
+  ALERT_SEND_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
 });
 
 export type GatewayConfig = ReturnType<typeof parseConfig>;

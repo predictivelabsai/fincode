@@ -1,5 +1,10 @@
 import {
   accountOverviewSchema,
+  alertChannelListSchema,
+  alertChannelSchema,
+  alertCreateChannelRequestSchema,
+  alertDeliveryListSchema,
+  alertTestSendResponseSchema,
   cancelRequestSchema,
   marketSearchResponseSchema,
   orderIntentResponseSchema,
@@ -12,6 +17,11 @@ import {
   walletSessionResponseSchema,
   walletSessionStatusSchema,
   type AccountOverview,
+  type AlertChannel,
+  type AlertChannelList,
+  type AlertCreateChannelRequest,
+  type AlertDeliveryList,
+  type AlertTestSendResponse,
   type CancellationSelector,
   type CreateOrderProposal,
   type OrderIntentResponse,
@@ -141,6 +151,36 @@ export class GatewayClient {
   stopPaperStrategy(): Promise<PaperStrategySnapshot> {
     return this.request("/v1/paper/strategy/stop", { method: "POST" })
       .then((value) => paperStrategySnapshotSchema.parse(value));
+  }
+
+  listAlertChannels(): Promise<AlertChannelList> {
+    return this.request("/v1/alerts/channels")
+      .then((value) => alertChannelListSchema.parse(value));
+  }
+
+  createAlertChannel(body: AlertCreateChannelRequest, idempotencyKey?: string): Promise<AlertChannel> {
+    return this.request("/v1/alerts/channels", {
+      method: "POST",
+      body: JSON.stringify(alertCreateChannelRequestSchema.parse(body)),
+    }, idempotencyKey).then((value) => alertChannelSchema.parse(value));
+  }
+
+  deleteAlertChannel(channelId: string, idempotencyKey?: string): Promise<void> {
+    return this.request(`/v1/alerts/channels/${encodeURIComponent(channelId)}`, {
+      method: "DELETE",
+    }, idempotencyKey).then(() => undefined);
+  }
+
+  testAlertChannel(channelId: string, idempotencyKey?: string): Promise<AlertTestSendResponse> {
+    return this.request(`/v1/alerts/channels/${encodeURIComponent(channelId)}/test`, {
+      method: "POST",
+    }, idempotencyKey).then((value) => alertTestSendResponseSchema.parse(value));
+  }
+
+  listAlertDeliveries(limit = 20): Promise<AlertDeliveryList> {
+    const search = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/v1/alerts/deliveries?${search}`)
+      .then((value) => alertDeliveryListSchema.parse(value));
   }
 
   createIntent(
