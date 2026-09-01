@@ -5,6 +5,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
+import { StrictMode } from "react";
 
 import RoutedApp from "./RoutedApp";
 
@@ -45,6 +46,7 @@ const mocks = vi.hoisted(() => {
     startPaperStrategy: vi.fn(),
     stopPaperStrategy: vi.fn(),
     publicMarkets: vi.fn(),
+    publicMarket: vi.fn(),
   };
 });
 
@@ -96,6 +98,7 @@ vi.mock("./api", () => ({
     createIntent = vi.fn();
     submitIntent = vi.fn();
     publicMarkets = mocks.publicMarkets;
+    publicMarket = mocks.publicMarket;
   },
 }));
 
@@ -297,13 +300,16 @@ function LocationProbe() {
   return <output data-testid="location">{useLocation().pathname}</output>;
 }
 
-function renderRoute(route: string) {
-  return render(
+function renderRoute(route: string, strictMode = false) {
+  const content = (
     <MemoryRouter initialEntries={[route]}>
       <RoutedApp />
       <LocationProbe />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  // The deployed app renders inside <StrictMode>, which remounts every effect
+  // once in development — wrap to reproduce that behavior in tests.
+  return strictMode ? render(<StrictMode>{content}</StrictMode>) : render(content);
 }
 
 beforeEach(() => {
@@ -739,6 +745,20 @@ describe("routed workspace", () => {
     expect(window.confirm).toHaveBeenCalled();
   });
 
+  it("hands gateway helpers a token provider that resolves the authentication token", async () => {
+    // Regression: the workspace token provider must call through to
+    // authentication, never recurse into itself.
+    let observedToken: string | null = null;
+    mocks.listAgentThreads.mockImplementation(async (_url: string, token: () => Promise<string>) => {
+      observedToken = await token();
+      return [summaryA, summaryB];
+    });
+    renderRoute("/chat/new");
+
+    await screen.findByRole("complementary", { name: "Chat history" });
+    await waitFor(() => expect(observedToken).toBe("token"));
+  });
+
   it("serves the public market browse page outside the sign-in wall", async () => {
     mocks.publicMarkets.mockResolvedValue({
       markets: [publicMarketSummary],
@@ -753,5 +773,47 @@ describe("routed workspace", () => {
     expect(screen.getByRole("heading", { name: "Markets" })).toBeInTheDocument();
     expect(screen.getByTestId("profile")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Backtests" })).not.toBeInTheDocument();
+  });
+
+  it("seeds and auto-submits a chat opened from a public market page", async () => {
+    mocks.publicMarket.mockResolvedValue({
+      market: publicMarketSummary,
+      quotes: [],
+      observedAt: "2026-08-30T12:00:00.000Z",
+    });
+    renderRoute("/chat/new?market=public-market");
+
+    await waitFor(() => expect(mocks.publicMarket).toHaveBeenCalledWith("public-market"));
+    await waitFor(() => expect(mocks.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: THREAD_A,
+      text: expect.stringContaining("Will the public market page ship?"),
+    })));
+    expect(mocks.runAgentTurn).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/chat/${THREAD_A}`));
+  });
+
+  it("still seeds and auto-submits exactly once under StrictMode's effect remount", async () => {
+    mocks.publicMarket.mockResolvedValue({
+      market: publicMarketSummary,
+      quotes: [],
+      observedAt: "2026-08-30T12:00:00.000Z",
+    });
+    renderRoute("/chat/new?market=public-market", true);
+
+    await waitFor(() => expect(mocks.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: THREAD_A,
+      text: expect.stringContaining("Will the public market page ship?"),
+    })));
+    expect(mocks.runAgentTurn).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/chat/${THREAD_A}`));
+  });
+
+  it("files nothing when the seeded market cannot be loaded but still seeds the composer", async () => {
+    mocks.publicMarket.mockRejectedValue(new mocks.GatewayError("Public market not found", "NOT_FOUND", 404));
+    renderRoute("/chat/new?market=ghost-market");
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Ask PolyTrade" })).toHaveValue("Research the Polymarket market ghost-market."));
+    expect(mocks.runAgentTurn).not.toHaveBeenCalled();
+    expect(screen.getByTestId("location")).toHaveTextContent("/chat/new");
   });
 });

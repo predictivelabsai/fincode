@@ -72,7 +72,15 @@ export default function PublicApp() {
             />
           }
         />
-        <Route path="/markets/:slug" element={<MarketDetailRoute client={client} />} />
+        <Route
+          path="/markets/:slug"
+          element={
+            <MarketDetailRoute
+              client={client}
+              onAskAgent={(slug) => navigate(`/chat/new?market=${encodeURIComponent(slug)}`)}
+            />
+          }
+        />
         <Route path="*" element={<Navigate replace to="/markets" />} />
       </Routes>
 
@@ -85,7 +93,13 @@ export default function PublicApp() {
   );
 }
 
-function MarketDetailRoute({ client }: { client: GatewayClient }) {
+function MarketDetailRoute({
+  client,
+  onAskAgent,
+}: {
+  client: GatewayClient;
+  onAskAgent: (slug: string) => void;
+}) {
   const { slug } = useParams();
   const navigate = useNavigate();
   if (!slug) return <Navigate replace to="/markets" />;
@@ -94,6 +108,7 @@ function MarketDetailRoute({ client }: { client: GatewayClient }) {
       client={client}
       slug={slug}
       onBack={() => navigate("/markets")}
+      onAskAgent={onAskAgent}
     />
   );
 }
@@ -249,6 +264,7 @@ export function MarketDetailWorkspace(props: {
   client: GatewayClient;
   slug: string;
   onBack: () => void;
+  onAskAgent: (slug: string) => void;
 }) {
   const [detail, setDetail] = useState<PublicMarketDetail | null>(null);
   const [book, setBook] = useState<PublicOrderBook | null>(null);
@@ -345,6 +361,7 @@ export function MarketDetailWorkspace(props: {
     description: market
       ? `Live prices, order book depth, and history for "${market.question}" on Polymarket.`
       : undefined,
+    path: `/markets/${props.slug}`,
   });
 
   if (missing) {
@@ -406,6 +423,11 @@ export function MarketDetailWorkspace(props: {
           <span className={`status-pill ${market.acceptingOrders && !market.closed ? "status-pill-open" : "status-pill-sell"}`}>
             {market.closed ? "Closed" : market.acceptingOrders ? "Accepting orders" : "Not accepting orders"}
           </span>
+          <button
+            className="button button-primary"
+            type="button"
+            onClick={() => props.onAskAgent(market.slug)}
+          >Ask the agent</button>
         </div>
       </header>
 
@@ -624,7 +646,15 @@ function PageLoading({ label }: { label: string }) {
   );
 }
 
-function useDocumentMeta({ title, description }: { title: string; description?: string }) {
+function useDocumentMeta({
+  title,
+  description,
+  path,
+}: {
+  title: string;
+  description?: string;
+  path?: string;
+}) {
   useEffect(() => {
     document.title = title;
     const descriptionTag = document.querySelector("meta[name='description']");
@@ -633,7 +663,24 @@ function useDocumentMeta({ title, description }: { title: string; description?: 
     if (ogTitle) ogTitle.setAttribute("content", title);
     const ogDescription = document.querySelector("meta[property='og:description']");
     if (description && ogDescription) ogDescription.setAttribute("content", description);
-  }, [description, title]);
+    const siteUrl = env.VITE_PUBLIC_SITE_URL;
+    if (!siteUrl || !path) return;
+    const url = `${siteUrl.replace(/\/$/, "")}${path}`;
+    let canonical = document.querySelector("link[rel='canonical']");
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.setAttribute("rel", "canonical");
+      document.head.appendChild(canonical);
+    }
+    canonical.setAttribute("href", url);
+    let ogUrl = document.querySelector("meta[property='og:url']");
+    if (!ogUrl) {
+      ogUrl = document.createElement("meta");
+      ogUrl.setAttribute("property", "og:url");
+      document.head.appendChild(ogUrl);
+    }
+    ogUrl.setAttribute("content", url);
+  }, [description, path, title]);
 }
 
 function errorMessage(error: unknown): string {

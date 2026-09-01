@@ -4,6 +4,9 @@ const envSchema = z.object({
   VITE_API_URL: z.string().url(),
   VITE_CLERK_PUBLISHABLE_KEY: z.string().min(1),
   VITE_CLERK_JWT_TEMPLATE: z.string().min(1).default("polytrade"),
+  // Public origin of the deployed web app; enables canonical/og:url meta on
+  // the public market pages. Optional so local dev works without it.
+  VITE_PUBLIC_SITE_URL: z.string().url().optional(),
 });
 
 export const env = envSchema.parse(import.meta.env);
