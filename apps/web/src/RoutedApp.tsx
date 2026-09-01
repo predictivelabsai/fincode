@@ -18,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   Trash2,
+  TrendingUp,
   WalletCards,
   X,
   Zap,
@@ -87,7 +88,9 @@ import { BacktestsWorkspace } from "./Backtests";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { MarkdownMessage } from "./MarkdownMessage";
+import PublicApp from "./Markets";
 import { PaperWorkspace } from "./Paper";
+import { isPublicRoute } from "./public-routes";
 import { connectWallet, signTypedPayload, type ConnectedWallet } from "./wallet";
 
 interface DeskMessage {
@@ -170,6 +173,9 @@ const emptyChat = (): ChatState => ({
 });
 
 export default function RoutedApp() {
+  const location = useLocation();
+  // Public market pages render entirely outside the signed-in workspace.
+  if (isPublicRoute(location.pathname)) return <PublicApp />;
   return (
     <WorkspaceProvider>
       <ApplicationShell />
@@ -179,15 +185,23 @@ export default function RoutedApp() {
 
 function WorkspaceProvider({ children }: { children: ReactNode }) {
   const authentication = useAuthentication();
+  // Workspace routes sit behind the sign-in wall, so agent calls get a strict
+  // non-null token provider even though the context widened to nullable for
+  // the public market pages.
+  const workspaceToken = useCallback(async () => {
+    const token = await workspaceToken();
+    if (!token) throw new GatewayError("Sign in to continue", "UNAUTHENTICATED", 401);
+    return token;
+  }, [authentication]);
   const navigate = useNavigate();
   const location = useLocation();
   const gateway = useMemo(
-    () => new GatewayClient(env.VITE_API_URL, authentication.getToken),
-    [authentication.getToken],
+    () => new GatewayClient(env.VITE_API_URL, workspaceToken),
+    [workspaceToken],
   );
   const backtests = useMemo(
-    () => new BacktestClient(env.VITE_API_URL, authentication.getToken),
-    [authentication.getToken],
+    () => new BacktestClient(env.VITE_API_URL, workspaceToken),
+    [workspaceToken],
   );
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
   const [threadsLoaded, setThreadsLoaded] = useState(false);
@@ -231,7 +245,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const refreshThreads = useCallback(async () => {
     try {
-      const next = await listAgentThreads(env.VITE_API_URL, authentication.getToken);
+      const next = await listAgentThreads(env.VITE_API_URL, workspaceToken);
       setThreads(next);
       return next;
     } catch (caught) {
@@ -240,7 +254,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     } finally {
       setThreadsLoaded(true);
     }
-  }, [authentication.getToken, setMessage]);
+  }, [workspaceToken, setMessage]);
 
   const refreshEligibility = useCallback(async () => {
     setEligibility(await checkBrowserEligibility());
@@ -312,7 +326,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       return { ...current, [threadId]: { ...existing, loading: true } };
     });
     try {
-      const items = await getAgentThreadItems(env.VITE_API_URL, authentication.getToken, threadId);
+      const items = await getAgentThreadItems(env.VITE_API_URL, workspaceToken, threadId);
       const messages = items
         .filter((item) => item.kind === "message")
         .map((item) => ({ id: item.id, role: item.role, text: item.text } satisfies DeskMessage));
@@ -352,7 +366,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     } finally {
       loadingThreadsRef.current.delete(threadId);
     }
-  }, [authentication.getToken, navigate, refreshThreads, setMessage]);
+  }, [workspaceToken, navigate, refreshThreads, setMessage]);
 
   const submitMessage = useCallback(async (requestedThreadId: string | undefined, text: string) => {
     const message = text.trim();
@@ -364,7 +378,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     let threadId = requestedThreadId;
     try {
       if (!threadId) {
-        threadId = await createAgentThread(env.VITE_API_URL, authentication.getToken);
+        threadId = await createAgentThread(env.VITE_API_URL, workspaceToken);
         navigate(`/chat/${threadId}`, { replace: true });
       }
       let targetThreadId = threadId;
@@ -384,7 +398,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       });
       await runAgentTurn({
         apiUrl: env.VITE_API_URL,
-        getToken: authentication.getToken,
+        getToken: workspaceToken,
         threadId: targetThreadId,
         text: message,
         handlers: {
@@ -458,7 +472,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       setActiveStreamHasText(false);
       await refreshThreads();
     }
-  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, setMessage]);
+  }, [activeStreamThreadId, workspaceToken, navigate, refreshThreads, setMessage]);
 
   const deleteThread = useCallback(async (threadId: string) => {
     if (activeStreamThreadId === threadId) {
@@ -466,7 +480,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      await deleteAgentThread(env.VITE_API_URL, authentication.getToken, threadId);
+      await deleteAgentThread(env.VITE_API_URL, workspaceToken, threadId);
       setChatStates((current) => {
         const { [threadId]: _removed, ...rest } = current;
         return rest;
@@ -481,7 +495,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     } catch (caught) {
       setMessage(errorMessage(caught));
     }
-  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, setMessage]);
+  }, [activeStreamThreadId, workspaceToken, navigate, refreshThreads, setMessage]);
 
   const connectAndVerify = useCallback(async () => {
     setBusy("wallet");
@@ -703,6 +717,7 @@ function ApplicationShell() {
           <NavLink to="/trades" className={({ isActive }) => isActive ? "nav-active" : ""}><BriefcaseBusiness /> Trades</NavLink>
           <NavLink to="/paper" className={({ isActive }) => isActive ? "nav-active" : ""}><Activity /> Paper</NavLink>
           <NavLink to="/backtests" className={({ isActive }) => isActive ? "nav-active" : ""}><BarChart3 /> Backtests</NavLink>
+          <NavLink to="/markets" className={({ isActive }) => isActive ? "nav-active" : ""}><TrendingUp /> Markets</NavLink>
         </nav>
         <div className="header-actions">
           <NavLink className={({ isActive }) => `header-settings ${isActive ? "nav-active" : ""}`} to="/settings">

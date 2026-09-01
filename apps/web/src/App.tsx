@@ -34,7 +34,7 @@ import {
 } from "@polytrade/contracts";
 import type { Hex } from "viem";
 
-import { GatewayClient, type AccountSnapshot } from "./api";
+import { GatewayClient, GatewayError, type AccountSnapshot } from "./api";
 import { AgentApiError, getAgentThreadItems, runAgentTurn } from "./agent";
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
@@ -73,6 +73,13 @@ const STARTER_QUESTIONS = [
 
 export default function App() {
   const authentication = useAuthentication();
+  // Agent calls require a session; provide a strict token provider on top of
+  // the nullable context (which is nullable only for public market pages).
+  const agentToken = useCallback(async () => {
+    const token = await authentication.getToken();
+    if (!token) throw new GatewayError("Sign in to continue", "UNAUTHENTICATED", 401);
+    return token;
+  }, [authentication]);
   const gateway = useMemo(
     () => new GatewayClient(env.VITE_API_URL, authentication.getToken),
     [authentication.getToken],
@@ -125,7 +132,7 @@ export default function App() {
     let cancelled = false;
     void getAgentThreadItems(
       env.VITE_API_URL,
-      authentication.getToken,
+      agentToken,
       savedThreadId,
     ).then((items) => {
       if (cancelled || hasInteracted.current) return;
@@ -162,7 +169,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authentication.getToken]);
+  }, [agentToken]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -185,7 +192,7 @@ export default function App() {
     try {
       await runAgentTurn({
         apiUrl: env.VITE_API_URL,
-        getToken: authentication.getToken,
+        getToken: agentToken,
         threadId,
         text,
         handlers: {

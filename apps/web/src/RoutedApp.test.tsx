@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
     searchMarkets: vi.fn(),
     startPaperStrategy: vi.fn(),
     stopPaperStrategy: vi.fn(),
+    publicMarkets: vi.fn(),
   };
 });
 
@@ -94,6 +95,7 @@ vi.mock("./api", () => ({
     cancel = vi.fn();
     createIntent = vi.fn();
     submitIntent = vi.fn();
+    publicMarkets = mocks.publicMarkets;
   },
 }));
 
@@ -273,6 +275,22 @@ const run = {
   cancelRequested: false,
   warnings: [],
   createdAt: "2026-08-04T00:00:00.000Z",
+};
+const publicMarketSummary = {
+  id: "public-market-1",
+  conditionId: "public-condition-1",
+  slug: "public-market",
+  question: "Will the public market page ship?",
+  outcomes: ["Yes", "No"],
+  outcomePrices: ["0.65", "0.35"],
+  clobTokenIds: ["123", "456"],
+  active: true,
+  closed: false,
+  acceptingOrders: true,
+  endDate: "2026-09-30T00:00:00.000Z",
+  liquidity: "40000",
+  volume: "900000",
+  volume24hr: "120000",
 };
 
 function LocationProbe() {
@@ -719,5 +737,21 @@ describe("routed workspace", () => {
     await user.click(within(history).getByRole("button", { name: "Delete Election liquidity" }));
     await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://api.polytrade.test", expect.any(Function), THREAD_A));
     expect(window.confirm).toHaveBeenCalled();
+  });
+
+  it("serves the public market browse page outside the sign-in wall", async () => {
+    mocks.publicMarkets.mockResolvedValue({
+      markets: [publicMarketSummary],
+      limit: 12,
+      offset: 0,
+      hasMore: false,
+      observedAt: "2026-08-30T12:00:00.000Z",
+    });
+    renderRoute("/markets");
+
+    expect(await screen.findByText("Will the public market page ship?")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Markets" })).toBeInTheDocument();
+    expect(screen.getByTestId("profile")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Backtests" })).not.toBeInTheDocument();
   });
 });

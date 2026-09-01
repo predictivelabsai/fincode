@@ -8,14 +8,18 @@ import {
   paperPortfolioSchema,
   paperQuoteSchema,
   paperStrategySnapshotSchema,
+  publicMarketDetailSchema,
+  publicMarketListResponseSchema,
+  publicOrderBookSchema,
+  publicPriceHistorySchema,
   walletChallengeResponseSchema,
   walletSessionResponseSchema,
   walletSessionStatusSchema,
   type AccountOverview,
   type CancellationSelector,
   type CreateOrderProposal,
-  type OrderIntentResponse,
   type MarketSearchResponse,
+  type OrderIntentResponse,
   type PaperFillsResponse,
   type PaperOrderRequest,
   type PaperOrderResponse,
@@ -24,6 +28,10 @@ import {
   type PaperQuoteRequest,
   type PaperStrategySnapshot,
   type PaperStrategyStartRequest,
+  type PublicMarketDetail,
+  type PublicMarketListResponse,
+  type PublicOrderBook,
+  type PublicPriceHistory,
   type WalletChallengeRequest,
   type WalletChallengeResponse,
   type WalletSessionResponse,
@@ -50,10 +58,12 @@ export class GatewayError extends Error {
   }
 }
 
+export type MarketHistoryInterval = "1h" | "6h" | "1d" | "1w" | "max";
+
 export class GatewayClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly getToken: () => Promise<string>,
+    private readonly getToken: () => Promise<string | null>,
   ) {}
 
   createChallenge(body: WalletChallengeRequest): Promise<WalletChallengeResponse> {
@@ -168,11 +178,34 @@ export class GatewayClient {
     });
   }
 
+  publicMarkets(limit = 12, offset = 0, order: "volume24hr" | "liquidity" | "endDate" = "volume24hr"): Promise<PublicMarketListResponse> {
+    const search = new URLSearchParams({ limit: String(limit), offset: String(offset), order });
+    return this.request(`/v1/public/markets?${search}`)
+      .then((value) => publicMarketListResponseSchema.parse(value));
+  }
+
+  publicMarket(slug: string): Promise<PublicMarketDetail> {
+    return this.request(`/v1/public/markets/${encodeURIComponent(slug)}`)
+      .then((value) => publicMarketDetailSchema.parse(value));
+  }
+
+  publicOrderBook(tokenId: string): Promise<PublicOrderBook> {
+    return this.request(`/v1/public/order-books/${encodeURIComponent(tokenId)}`)
+      .then((value) => publicOrderBookSchema.parse(value));
+  }
+
+  publicPriceHistory(tokenId: string, interval: MarketHistoryInterval = "1d"): Promise<PublicPriceHistory> {
+    const search = new URLSearchParams({ interval });
+    return this.request(`/v1/public/price-history/${encodeURIComponent(tokenId)}?${search}`)
+      .then((value) => publicPriceHistorySchema.parse(value));
+  }
+
   private async request<T>(path: string, init: RequestInit = {}, idempotencyKey?: string): Promise<T> {
     const token = await this.getToken();
     const method = init.method?.toUpperCase() ?? "GET";
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${token}`);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    else headers.delete("Authorization");
     headers.set("Accept", "application/json");
     if (init.body) headers.set("Content-Type", "application/json");
     if (method !== "GET" && method !== "HEAD") {

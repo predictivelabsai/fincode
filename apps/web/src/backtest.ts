@@ -24,7 +24,7 @@ export class BacktestApiError extends Error {
 export class BacktestClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly getToken: () => Promise<string>,
+    private readonly getToken: () => Promise<string | null>,
   ) {}
 
   async list(limit = 50): Promise<BacktestRun[]> {
