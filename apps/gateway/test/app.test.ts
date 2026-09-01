@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 
@@ -197,6 +198,8 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
   await app.ready();
   return {
     app,
+    store,
+    trading,
     challengeCalls: () => challengeCalls,
     createdIntents,
     submittedIntents,
@@ -328,6 +331,80 @@ describe("gateway HTTP boundary", () => {
       payload: { ...body, walletAddress: "0x0000000000000000000000000000000000000002" },
     });
     expect(changed.statusCode).toBe(409);
+    await app.close();
+  });
+
+  it("releases the idempotency claim when a request fails so the retry re-executes", async () => {
+    const { app, trading, challengeCalls } = await setup();
+    const headers = {
+      authorization: "Bearer token",
+      "content-type": "application/json",
+      "idempotency-key": "retry-after-failure-key-1",
+    };
+    const body = { walletAddress: "0x0000000000000000000000000000000000000001", signatureType: 0 };
+    const gate = { enabled: true };
+    const original = trading.createChallenge.bind(trading);
+    trading.createChallenge = async (...args: Parameters<typeof trading.createChallenge>) => {
+      if (gate.enabled) throw new AppError(503, "UPSTREAM_UNAVAILABLE", "Polymarket is unavailable");
+      return original(...args);
+    };
+
+    const failed = await app.inject({ method: "POST", url: "/v1/wallet-sessions/challenge", headers, payload: body });
+    expect(failed.statusCode).toBe(503);
+    expect(challengeCalls()).toBe(0);
+
+    gate.enabled = false;
+    const retry = await app.inject({ method: "POST", url: "/v1/wallet-sessions/challenge", headers, payload: body });
+    expect(retry.statusCode).toBe(200);
+    expect(challengeCalls()).toBe(1);
+    await app.close();
+  });
+
+  it("re-claims idempotency keys orphaned by a crash after the stale window", async () => {
+    const { app, store, challengeCalls } = await setup();
+    const headers = {
+      authorization: "Bearer token",
+      "content-type": "application/json",
+      "idempotency-key": "orphaned-claim-key-1",
+    };
+    const body = { walletAddress: "0x0000000000000000000000000000000000000001", signatureType: 0 };
+    const requestHash = createHash("sha256").update('{"signatureType":0,"walletAddress":"0x0000000000000000000000000000000000000001"}').digest("hex");
+
+    // A fresh orphaned claim still guards the in-flight request.
+    store.idempotency.set("assethero:user-1:wallet-session.challenge:orphaned-claim-key-1", {
+      hash: requestHash, createdAt: new Date(), response: undefined,
+    });
+    const pending = await app.inject({ method: "POST", url: "/v1/wallet-sessions/challenge", headers, payload: body });
+    expect(pending.statusCode).toBe(409);
+    expect(challengeCalls()).toBe(0);
+
+    // Past the stale window the crashed claim no longer blocks the key forever.
+    store.idempotency.set("assethero:user-1:wallet-session.challenge:orphaned-claim-key-1", {
+      hash: requestHash, createdAt: new Date(Date.now() - 6 * 60_000), response: undefined,
+    });
+    const recovered = await app.inject({ method: "POST", url: "/v1/wallet-sessions/challenge", headers, payload: body });
+    expect(recovered.statusCode).toBe(200);
+    expect(challengeCalls()).toBe(1);
+    await app.close();
+  });
+
+  it("re-claims a previously pinned failure response once it goes stale", async () => {
+    const { app, store, challengeCalls } = await setup();
+    const headers = {
+      authorization: "Bearer token",
+      "content-type": "application/json",
+      "idempotency-key": "legacy-pinned-failure-key-1",
+    };
+    const body = { walletAddress: "0x0000000000000000000000000000000000000001", signatureType: 0 };
+    const requestHash = createHash("sha256").update('{"signatureType":0,"walletAddress":"0x0000000000000000000000000000000000000001"}').digest("hex");
+    store.idempotency.set("assethero:user-1:wallet-session.challenge:legacy-pinned-failure-key-1", {
+      hash: requestHash, createdAt: new Date(Date.now() - 6 * 60_000),
+      response: { ok: false, status: 503, code: "UPSTREAM_UNAVAILABLE", message: "stored long ago" },
+    });
+
+    const recovered = await app.inject({ method: "POST", url: "/v1/wallet-sessions/challenge", headers, payload: body });
+    expect(recovered.statusCode).toBe(200);
+    expect(challengeCalls()).toBe(1);
     await app.close();
   });
 

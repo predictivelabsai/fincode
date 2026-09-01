@@ -1282,6 +1282,12 @@ select {
   align-items: center;
 }
 
+.ticket-field-error {
+  color: var(--danger, #f87171);
+  font-size: 0.56rem;
+  line-height: 1.35;
+}
+
 .post-only-field,
 .review-check {
   display: flex;
@@ -2776,6 +2782,47 @@ th small {
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.55;
+}
+
+.settings-steps {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.7;
+}
+
+.settings-steps strong {
+  color: var(--text);
+}
+
+.settings-hint {
+  margin: 6px 0 14px;
+  color: var(--faint);
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.settings-help {
+  margin: 0 0 12px;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+
+.settings-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 620;
+}
+
+.settings-help ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
+.settings-help a {
+  color: var(--accent-strong);
 }
 
 .settings-form,

@@ -19,3 +19,15 @@ export const validation = (message: string, details?: unknown) =>
   new AppError(400, "VALIDATION_ERROR", message, details);
 export const unavailable = (message: string) =>
   new AppError(503, "UPSTREAM_UNAVAILABLE", message);
+
+/**
+ * True when an upstream failure definitively did NOT accept the order — a 4xx
+ * reply means Polymarket processed the request and refused it, so the safe
+ * terminal state is "rejected". Timeouts, 5xx, and network failures are
+ * ambiguous (the order may have landed) and must never be treated as rejected.
+ */
+export function isDefinitiveRejection(error: unknown): boolean {
+  if (error instanceof AppError) return error.statusCode >= 400 && error.statusCode < 500;
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && Number.isInteger(status) && status >= 400 && status < 500;
+}

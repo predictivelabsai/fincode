@@ -17,6 +17,15 @@ import {
 } from "./auth";
 import { env } from "./env";
 
+// Local/E2E-only seam: VITE_E2E_AUTH_BYPASS=1 (never set in deployed builds)
+// renders the app without Clerk sign-in so tools like Playwright can
+// screenshot authenticated pages. getToken returns a meaningless token —
+// HTTP clients still issue real requests, which test tooling intercepts.
+const e2eAuthBypass = import.meta.env.VITE_E2E_AUTH_BYPASS === "1";
+const e2eAuthentication: Authentication = {
+  getToken: async () => "e2e-auth-bypass",
+};
+
 function ClerkAuthentication({ children }: { children: ReactNode }) {
   const { getToken, isLoaded } = useAuth();
   const tokenProvider = useCallback(async () => {
@@ -45,6 +54,10 @@ export default function StandaloneAuthentication({ children }: { children: React
       </section>
     </main>
   );
+
+  if (e2eAuthBypass) {
+    return <AuthenticationProvider value={e2eAuthentication}>{children}</AuthenticationProvider>;
+  }
 
   return (
     <ClerkProvider

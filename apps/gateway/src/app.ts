@@ -160,12 +160,12 @@ export async function buildApp(deps: AppDependencies) {
       await deps.store.finishIdempotency(owner.id, operation, key, { ok: true, value });
       return value;
     } catch (error) {
-      const stored = error instanceof AppError
-        ? { ok: false, status: error.statusCode, code: error.code, message: error.message, details: error.details }
-        : error instanceof z.ZodError
-          ? { ok: false, status: 400, code: "VALIDATION_ERROR", message: "Invalid request", details: error.issues }
-          : { ok: false, status: 500, code: "INTERNAL_ERROR", message: "Internal server error" };
-      await deps.store.finishIdempotency(owner.id, operation, key, stored);
+      // Failures are never saved into the replay cache — a stored 503 would be
+      // replayed forever, and a pinned 4xx would keep a valid Idempotency-Key
+      // from ever succeeding after the underlying cause (e.g. a low balance)
+      // was fixed. Release the claim so the retry re-executes; every
+      // operation underneath carries its own idempotency/ownership guards.
+      await deps.store.releaseIdempotency(owner.id, operation, key);
       throw error;
     }
   };
