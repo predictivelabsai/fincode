@@ -220,10 +220,16 @@ const SCENARIOS = {
     },
     steps: async (page, t) => {
       await page.goto(`${APP_URL}/paper`, { waitUntil: "networkidle" });
-      await page.waitForTimeout(500);
+      await page.waitForSelector(".paper-load-failed", { timeout: 8000 });
       const body = await page.textContent("body");
-      await t.assert(body.includes("10,000.00"), "FAILED initial load still renders 'Started with 10,000.00' fake fresh-account ledger (finding #8)", "ledger text: " + body.match(/Started with[\s\S]{0,60}/)?.[0]);
+      await t.assert(body.includes("Paper ledger could not be loaded"), "failed initial load renders a retryable error panel", "body: " + body.match(/Paper ledger[\s\S]{0,120}/)?.[0]);
+      await t.assert(!body.includes("Practice against the live public order book"), "no fake zeroed ledger is rendered behind the failure", "ledger copy must not appear");
       await t.snapshot("paper-error", "paper dashboard after failed initial load");
+      // recovery
+      await page.route("**/v1/paper/refresh", (r) => r.fulfill(json(200, PORTFOLIO)));
+      await page.click(".paper-load-failed button");
+      await page.waitForSelector(".paper-page", { timeout: 8000 });
+      await t.snapshot("paper-error-recovered", "paper dashboard after successful retry");
     },
   },
   "editor-typing": {
@@ -271,20 +277,25 @@ const SCENARIOS = {
       let listRequests = 0;
       page.on("request", (r) => { if (new URL(r.url()).pathname === "/v1/backtests") listRequests++; });
       await page.goto(`${APP_URL}/backtests`, { waitUntil: "networkidle" });
-      await page.waitForTimeout(10_000);
+      await page.waitForSelector(".run-empty-error", { timeout: 8000 });
       const body1 = await page.textContent("body");
-      await t.assert(body1.includes("No backtests yet"), "list-load failure renders 'No backtests yet' empty state (finding #9)", "empty-state copy shown to user while data is merely unreachable");
-      await t.assert(listRequests >= 4, `list re-polled ${listRequests}× in 10s after a failure (re-arm loop)`, "each retry re-shows the error toast");
+      await t.assert(body1.includes("Backtests are unreachable"), "list-load failure renders an inline 'Backtests are unreachable' panel", "body: " + body1.match(/Backtests are unreachable[\s\S]{0,120}/)?.[0]);
+      await t.assert(!body1.includes("No backtests yet"), "'No backtests yet' is NOT shown while the library is only unreachable", "empty-state copy must not appear");
+      await t.snapshot("backtests-error", "backtests page after list load failure");
       const dismiss = page.locator("button[aria-label='Dismiss message']");
       if ((await dismiss.count()) > 0) {
         await dismiss.first().click();
-        await page.waitForTimeout(3_500);
-        const body2 = await page.textContent("body");
-        await t.assert(body2.includes("Backtest"), "dismissed error toast returns within 3.5s (immortal toast, finding #3)", "toast re-armed by the poll's catch handler");
+        await page.waitForTimeout(4_000);
+        const reCount = await page.locator("button[aria-label='Dismiss message']").count();
+        await t.assert(reCount === 0, "dismissed error toast does not return while the failure episode continues", reCount > 0 ? "poll's catch handler re-armed the toast" : "one toast per failure episode");
       } else {
-        t.note("no dismiss button found to test re-arm");
+        t.note("no toast dismissal to test re-arm");
       }
-      await t.snapshot("backtests-error", "backtests page after list load failure + 10s");
+      await page.waitForTimeout(5_500);
+      const body2 = await page.textContent("body");
+      await t.assert(body2.includes("Backtests are unreachable"), "inline panel persists across further poll ticks", "");
+      t.note(`list polls in 15s window: ${listRequests}`);
+      await t.snapshot("backtests-error-10s", "backtests page after list load failure + 10s");
     },
   },
   "backtests-completed": {
@@ -304,7 +315,7 @@ const SCENARIOS = {
       page.on("request", (r) => { if (new URL(r.url()).pathname.includes(`/v1/backtests/${RUN_ID}/series`)) downloads++; });
       await page.goto(`${APP_URL}/backtests/${RUN_ID}`, { waitUntil: "networkidle" });
       await page.waitForTimeout(7_500);
-      await t.assert(downloads >= 2, `completed run's series re-downloaded ${downloads}× within 7.5s while idle (finding #4)`, "same 4-endpoint payload re-fetched every 3s tick forever");
+      await t.assert(downloads === 1, `completed run's series fetched exactly once within 7.5s while idle (got ${downloads})`, downloads > 1 ? "settled run's payloads re-fetched every 3s tick forever" : "settled-run skip took effect");
       await t.snapshot("backtests-completed", "completed backtest detail");
     },
   },
@@ -317,13 +328,18 @@ const SCENARIOS = {
     },
     steps: async (page, t) => {
       let poll404 = 0;
-      page.on("request", (r) => { if (new URL(r.url()).pathname.startsWith("/v1/backtests/")) poll404++; });
+      page.on("request", (r) => { const p2 = new URL(r.url()).pathname; if (p2.startsWith(`/v1/backtests/${RUN_ID}`)) poll404++; });
       await page.goto(`${APP_URL}/backtests/${RUN_ID}`, { waitUntil: "networkidle" });
-      await page.waitForTimeout(7_000);
+      await page.waitForSelector(".stage-missing", { timeout: 8000 });
       const body = await page.textContent("body");
-      await t.assert(body.includes("Select a replay tape"), "deep-link to a missing run renders generic empty stage instead of a not-found panel (finding #3 scenario)", "URL keeps pointing at a dead runId");
-      t.note(`polls to /v1/backtests/${RUN_ID} in 7s: ${poll404}`);
+      await t.assert(body.includes("Backtest not found"), "deep-link to a missing run renders a 'Backtest not found' panel", "body: " + body.match(/Backtest not found[\s\S]{0,120}/)?.[0]);
+      await page.waitForTimeout(7_000);
+      t.note(`detail requests to /v1/backtests/${RUN_ID} in 15s: ${poll404}`);
+      await t.assert(poll404 <= 2, `missing run detail requested at most twice in 15s (got ${poll404})`, poll404 > 2 ? "404 re-requested every tick" : "missing-run skip took effect");
       await t.snapshot("backtests-404", "deep link to deleted/foreign backtest");
+      await page.click(".stage-missing button");
+      await page.waitForURL("**/backtests");
+      await t.assert(true, "'Back to all backtests' navigates off the dead runId", "");
     },
   },
   "chat-lost": {
@@ -337,14 +353,17 @@ const SCENARIOS = {
     },
     steps: async (page, t) => {
       await page.goto(`${APP_URL}/chat`, { waitUntil: "networkidle" });
+      // /chat deep-links into the latest thread; a first message that must
+      // CREATE a thread only happens from the unsaved new-chat route.
+      await page.click("text=New chat");
+      await page.waitForTimeout(600);
       const composer = page.locator(".composer textarea, .composer input").first();
       const text = "What are the odds of a September rate cut?";
       await composer.fill(text);
       await page.click(".composer button[type='submit']");
       await page.waitForTimeout(2_500);
-      const body = await page.textContent("body");
       const composerValue = await composer.inputValue();
-      await t.assert(composerValue === "", `composer clears after send even when thread creation fails (finding #5) — typed text ${composerValue === "" ? "is lost" : `kept: "${composerValue}"`}`, body.includes(text) ? "text still visible" : "text appears nowhere on the page");
+      await t.assert(composerValue === text, `composer restores the typed text when thread creation fails (kept: "${composerValue.slice(0, 40)}…")`, composerValue === "" ? "text was silently discarded" : "text returned to the composer");
       await t.snapshot("chat-lost", "chat after first-message failure");
     },
   },

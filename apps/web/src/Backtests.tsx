@@ -59,10 +59,13 @@ export function BacktestsWorkspace(props: {
   // Remembers which terminal run/page has already been fully fetched so the
   // poll stops re-downloading a completed run's series and ledger forever.
   const settledRef = useRef<{ runId: string; phase: string; tradePage: number } | null>(null);
+  // and stops re-requesting a run that answered 404 until the selection moves.
+  const missingRunRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (props.focusedRunId) setSelectedId(props.focusedRunId);
     setSelectedMissing(false);
+    missingRunRef.current = null;
   }, [props.focusedRunId]);
 
   // The library row already carries the title, status, and configuration, so the
@@ -138,16 +141,18 @@ export function BacktestsWorkspace(props: {
         const id = selectedId ?? props.focusedRunId ?? nextRuns[0]?.runId;
         if (id) {
           const listed = nextRuns.find((run) => run.runId === id);
+          if (listed && missingRunRef.current === id) missingRunRef.current = null;
           const settled =
             listed && !ACTIVE_STATUSES.has(listed.status)
             && settledRef.current?.runId === id
             && settledRef.current.phase === listed.phase
             && settledRef.current.tradePage === tradePage;
-          if (!settled) {
+          if (!settled && missingRunRef.current !== id) {
             try {
               await refreshSelected(id, isActive, listed?.status === "completed");
               if (!cancelled && listed) {
                 setSelectedMissing(false);
+                missingRunRef.current = null;
                 if (!ACTIVE_STATUSES.has(listed.status)) {
                   settledRef.current = { runId: id, phase: listed.phase, tradePage };
                 }
@@ -156,6 +161,7 @@ export function BacktestsWorkspace(props: {
               if (cancelled) return;
               if (caught instanceof BacktestApiError && caught.status === 404) {
                 setSelectedMissing(true);
+                missingRunRef.current = id;
               } else {
                 notify(caught);
               }
@@ -204,6 +210,7 @@ export function BacktestsWorkspace(props: {
     setTradePage(0);
     setLoading(true);
     setSelectedMissing(false);
+    missingRunRef.current = null;
     props.onSelectRun?.(runId);
   };
 
