@@ -1260,12 +1260,37 @@ function SettingsPage() {
             </>
           ) : (
             <>
-              <p className="settings-copy">Connect an existing Polygon wallet. PolyTrade asks it to sign a short authentication challenge, then stores only encrypted API credentials server-side.</p>
+              <ol className="settings-steps" aria-label="How connecting works">
+                <li><strong>Pick your wallet type below</strong> — the default covers most people.</li>
+                <li><strong>Connect</strong> — your wallet opens and, if it is not on Polygon, asks you to switch. Accept that.</li>
+                <li><strong>Sign once</strong> — a free signature proving you own the wallet. Never a transaction, no gas.</li>
+              </ol>
+              <p className="settings-copy">PolyTrade stores only encrypted API credentials server-side — your private key never leaves your wallet.</p>
               <div className="settings-form">
-                <label><span>Wallet structure</span><select value={workspace.signatureType} onChange={(event) => workspace.setSignatureType(Number(event.target.value) as 0 | 1 | 2 | 3)}><option value={0}>Direct wallet (EOA)</option><option value={1}>Polymarket proxy</option><option value={2}>Safe wallet</option><option value={3}>EIP-1271 wallet</option></select></label>
+                <label>
+                  <span>Wallet type</span>
+                  <select value={workspace.signatureType} onChange={(event) => workspace.setSignatureType(Number(event.target.value) as 0 | 1 | 2 | 3)} aria-label="Wallet type">
+                    <option value={0}>Personal wallet (MetaMask, Rabby, …)</option>
+                    <option value={1}>Polymarket account — email login</option>
+                    <option value={2}>Polymarket account — browser wallet login</option>
+                    <option value={3}>Smart-contract wallet (EIP-1271)</option>
+                  </select>
+                </label>
                 {workspace.signatureType !== 0 && <label><span>Funder / maker address</span><input value={workspace.funderAddress} onChange={(event) => workspace.setFunderAddress(event.target.value)} placeholder="0x…" spellCheck={false} /></label>}
               </div>
+              <p className="settings-hint">{walletStructureHint(workspace.signatureType)}</p>
+              {workspace.signatureType !== 0 && (
+                <details className="settings-help">
+                  <summary>Where do I find this address?</summary>
+                  <ol>
+                    <li>Log in at <a href="https://polymarket.com" target="_blank" rel="noreferrer">polymarket.com</a>.</li>
+                    <li>Open <strong>Portfolio</strong> and copy the wallet address shown there — it starts with 0x and is <strong>not</strong> the address inside your wallet app.</li>
+                    <li>Paste it above as the funder address. Your wallet app only signs; that Polymarket wallet holds the funds.</li>
+                  </ol>
+                </details>
+              )}
               <button className="button button-primary" type="button" onClick={() => void workspace.connectAndVerify()} disabled={workspace.busy === "wallet" || restricted || (workspace.signatureType !== 0 && !workspace.funderAddress)}><WalletCards /> {workspace.busy === "wallet" ? "Waiting for wallet…" : "Connect and verify wallet"}</button>
+              <p className="settings-hint">Needs a wallet extension in this browser (MetaMask, Rabby, …) — phone browsers usually do not have one.</p>
               {restricted && <p className="restriction-note">{eligibilityRestrictionMessage(workspace.eligibility)}</p>}
             </>
           )}
@@ -1606,13 +1631,22 @@ function eligibilityAllowsTrading(value: Eligibility | null): boolean {
 }
 
 function eligibilityRestrictionMessage(browser: Eligibility | null): string {
-  if (!browser?.verified) return "The browser IP check could not be completed. New-order wallet verification remains unavailable.";
-  if (browser.blocked) return `New orders are unavailable in ${browser.country || "this browser location"}.`;
-  return "Wallet verification for new orders is unavailable.";
+  if (!browser?.verified) return "Polymarket's availability check did not respond from this browser — check your connection or VPN, then press Recheck eligibility above.";
+  if (browser.blocked) return `New orders are unavailable in ${browser.country || "this browser location"}. Researching and paper trading still work.`;
+  return "Wallet verification for new orders is unavailable — press Recheck eligibility above, then reload this page if it stays blocked.";
 }
 
 function walletTypeLabel(value: 0 | 1 | 2 | 3): string {
-  return ["Direct wallet (EOA)", "Polymarket proxy", "Safe wallet", "EIP-1271 wallet"][value] ?? "Unknown";
+  return ["Personal wallet", "Polymarket account (email login)", "Polymarket account (browser wallet login)", "Smart-contract wallet (EIP-1271)"][value] ?? "Unknown";
+}
+
+function walletStructureHint(value: 0 | 1 | 2 | 3): string {
+  return [
+    "You hold USDC on Polygon directly in this wallet — no funder address needed.",
+    "For Polymarket accounts created with an email login. Your funds sit in a Polymarket proxy wallet — paste its address in the funder field.",
+    "For Polymarket accounts created by connecting a wallet like MetaMask to polymarket.com. Your funds sit in a Polymarket Safe wallet — paste its address in the funder field.",
+    "Advanced: wallets that verify signatures through a smart contract. Paste the contract wallet address into the funder field.",
+  ][value] ?? "";
 }
 
 function compactIdentifier(value: string): string {

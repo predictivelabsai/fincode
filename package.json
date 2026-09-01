@@ -3,7 +3,9 @@
   "version": "4.0.0",
   "private": true,
   "packageManager": "pnpm@10.32.1",
-  "engines": { "node": ">=20.18.1" },
+  "engines": {
+    "node": ">=20.18.1"
+  },
   "pnpm": {
     "overrides": {
       "ws": "8.21.1"
@@ -21,5 +23,8 @@
     "test:agent": "uv run --project services/agent pytest -q services/agent/tests",
     "test:backtest": "uv run --project services/backtest pytest -q services/backtest/tests",
     "typecheck": "pnpm --filter @polytrade/contracts build && pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }
