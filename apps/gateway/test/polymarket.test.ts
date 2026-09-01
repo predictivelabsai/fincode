@@ -64,6 +64,63 @@ describe("PolymarketAdapter", () => {
     expect(new URL(observedUrl).searchParams.get("events_status")).toBe("closed");
   });
 
+  it("lists active bookable markets ordered by Gamma and reports pagination", async () => {
+    let observedUrl = "";
+    const request = async (input: string | URL | Request) => {
+      observedUrl = String(input);
+      return new Response(JSON.stringify([
+        {
+          id: "1",
+          conditionId: "condition-1",
+          slug: "fed-september",
+          question: "Will the Fed hold?",
+          outcomes: '["Yes","No"]',
+          outcomePrices: '["0.435","0.565"]',
+          clobTokenIds: '["123","456"]',
+          active: true,
+          closed: false,
+          acceptingOrders: true,
+          enableOrderBook: true,
+          restricted: true,
+          icon: "https://icon.test/fed.png",
+          volume24hr: 1721754.107278002,
+        },
+        { id: "2", conditionId: "c2", question: "No book", outcomes: '["Yes","No"]', clobTokenIds: '["789","012"]', active: true, closed: false, acceptingOrders: true, enableOrderBook: false },
+        { id: "3", conditionId: "c3", question: "Single outcome", outcomes: '["Yes"]', clobTokenIds: '["345"]', active: true, closed: false, acceptingOrders: true, enableOrderBook: true },
+      ]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const adapter = new PolymarketAdapter(config(), request as typeof fetch);
+    const result = await adapter.listActiveMarkets({ limit: 12, offset: 0, order: "volume24hr" }) as {
+      markets: Array<Record<string, unknown>>;
+      hasMore: boolean;
+    };
+
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe("/markets");
+    expect(url.searchParams.get("active")).toBe("true");
+    expect(url.searchParams.get("closed")).toBe("false");
+    expect(url.searchParams.get("limit")).toBe("12");
+    expect(url.searchParams.get("offset")).toBe("0");
+    expect(url.searchParams.get("order")).toBe("volume24hr");
+    expect(url.searchParams.get("ascending")).toBe("false");
+    expect(result.markets).toHaveLength(1);
+    expect(result.markets[0]).toMatchObject({
+      slug: "fed-september",
+      icon: "https://icon.test/fed.png",
+      volume24hr: "1721754.107278002",
+    });
+    expect(result.hasMore).toBe(false);
+  });
+
+  it("maps a missing public market to a 404 instead of an upstream failure", async () => {
+    const request = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const adapter = new PolymarketAdapter(config(), request);
+    await expect(adapter.getPublicMarket("ghost-market")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it("returns only backtest-eligible markets for resolved search", async () => {
     const eligible = {
       id: "eligible",
