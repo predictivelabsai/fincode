@@ -5,6 +5,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import App from "./RoutedApp";
 import AccuracyPage from "./AccuracyPage";
 import StandaloneAuthentication from "./clerk-auth";
+import TemplatesPage from "./TemplatesPage";
 import TrackRecordPage from "./TrackRecord";
 import "./styles.css";
 
@@ -19,6 +20,7 @@ root.render(
     <BrowserRouter>
       <Routes>
         <Route path="/u/:token" element={<TrackRecordPage />} />
+        <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/accuracy" element={<AccuracyPage />} />
         <Route path="*" element={<StandaloneAuthentication><App /></StandaloneAuthentication>} />
       </Routes>

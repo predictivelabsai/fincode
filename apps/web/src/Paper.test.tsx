@@ -122,3 +122,124 @@ describe("ShareCard", () => {
     expect(client.disablePaperShare).toHaveBeenCalledOnce();
   });
 });
+
+const templateMarket = {
+  conditionId: "0xtemplatecondition",
+  question: "Will the template market resolve?",
+  outcomes: ["Yes", "No"],
+  outcomePrices: ["0.90", "0.10"],
+  clobTokenIds: ["100", "101"],
+  active: true,
+  closed: false,
+  acceptingOrders: true,
+  enableOrderBook: true,
+  archived: false,
+  restricted: false,
+  minimumOrderSize: "5",
+  minimumTickSize: "0.01",
+};
+
+function templateClient() {
+  return {
+    refreshPaperPortfolio: vi.fn(async () => portfolio),
+    paperPortfolio: vi.fn(async () => portfolio),
+    paperFills: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 20 })),
+    paperStrategy: vi.fn(async () => ({ strategy: null, events: [] })),
+    paperShareStatus: vi.fn(async () => noShare),
+    searchMarkets: vi.fn(async () => ({ query: "", state: "active", observedAt: "2026-09-02T00:00:00.000Z", events: [{ id: "e1", title: "t", markets: [templateMarket] }] })),
+    startPaperStrategy: vi.fn(async () => ({ strategy: null, events: [] })),
+  } as unknown as GatewayClient;
+}
+
+async function selectTemplateMarket(client: GatewayClient) {
+  await act(async () => flushPromises());
+  // The mounted template's suggested search has already run; pick its result.
+  const result = await screen.findByRole("button", { name: /Will the template market resolve/ });
+  await userEvent.click(result);
+  await act(async () => flushPromises());
+}
+
+describe("PaperWorkspace strategy templates", () => {
+  it("renders the template cards", async () => {
+    render(<PaperWorkspace client={templateClient()} onError={vi.fn()} onNotice={vi.fn()} />);
+    await act(async () => flushPromises());
+    expect(screen.getByText("Base-rate divergence")).toBeInTheDocument();
+    expect(screen.getByText("Longshot fade")).toBeInTheDocument();
+    expect(screen.getByText("EV sniping")).toBeInTheDocument();
+    expect(screen.getByText("Overreaction fade")).toBeInTheDocument();
+    expect(screen.getByText("Resolution grinder")).toBeInTheDocument();
+    expect(screen.getAllByText("Illustrative").length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("arms the template and pre-fills the search on deploy", async () => {
+    const client = templateClient();
+    render(<PaperWorkspace client={client} onError={vi.fn()} onNotice={vi.fn()} />);
+    await act(async () => flushPromises());
+    await userEvent.click(screen.getAllByRole("button", { name: /Deploy to paper/ })[1]!);
+    await act(async () => flushPromises());
+    expect(client.searchMarkets).toHaveBeenCalledWith("election winner", "active", 20);
+    expect(screen.getByText(/Template · Longshot fade/)).toBeInTheDocument();
+  });
+
+  it("starts a template strategy with template-derived absolute prices", async () => {
+    const client = templateClient();
+    render(
+      <PaperWorkspace
+        client={client}
+        onError={vi.fn()}
+        onNotice={vi.fn()}
+        initialTemplateId="longshot-fade"
+      />,
+    );
+    await selectTemplateMarket(client);
+    await userEvent.click(await screen.findByRole("button", { name: /Start in background/ }));
+    expect(client.startPaperStrategy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conditionId: "0xtemplatecondition",
+        tokenId: "100",
+        entryPrice: "0.88",
+        exitPrice: "0.93",
+        sharesPerOrder: "20",
+        maxPosition: "80",
+        intervalSeconds: 30,
+      }),
+      expect.any(String),
+    );
+  });
+
+  it("clears the template when the user edits a field", async () => {
+    const client = templateClient();
+    render(
+      <PaperWorkspace
+        client={client}
+        onError={vi.fn()}
+        onNotice={vi.fn()}
+        initialTemplateId="longshot-fade"
+      />,
+    );
+    await selectTemplateMarket(client);
+    const buyInput = await screen.findByLabelText("Strategy buy price");
+    await userEvent.clear(buyInput);
+    await userEvent.type(buyInput, "0.5");
+    await userEvent.click(await screen.findByRole("button", { name: /Start in background/ }));
+    expect(client.startPaperStrategy).toHaveBeenCalledWith(
+      expect.objectContaining({ entryPrice: "0.5" }),
+      expect.any(String),
+    );
+  });
+
+  it("keeps the default auto-fit when no template is armed", async () => {
+    const client = templateClient();
+    render(<PaperWorkspace client={client} onError={vi.fn()} onNotice={vi.fn()} />);
+    await act(async () => flushPromises());
+    await userEvent.type(screen.getByLabelText(/Search active Polymarket markets/), "fed");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await act(async () => flushPromises());
+    await userEvent.click(await screen.findByRole("button", { name: /Will the template market resolve/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Start in background/ }));
+    expect(client.startPaperStrategy).toHaveBeenCalledWith(
+      expect.objectContaining({ entryPrice: "0.88", exitPrice: "0.95", sharesPerOrder: "10", maxPosition: "50" }),
+      expect.any(String),
+    );
+  });
+});

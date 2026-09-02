@@ -44,6 +44,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import {
   createOrderProposalSchema,
@@ -59,6 +60,8 @@ import {
   type CancellationSelector,
   type MarketSearchMarket,
   type OrderIntentResponse,
+  strategyTemplateById,
+  type StrategyTemplate,
   type TradingActionProposal,
   type WalletSessionStatus,
 } from "@polytrade/contracts";
@@ -1186,6 +1189,18 @@ function TradesPage() {
 
 function PaperPage() {
   const workspace = useWorkspace();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTemplateId = searchParams.get("template");
+  // Consume ?template= once it has armed the workspace so a refresh does not
+  // re-arm it. Keeps PaperWorkspace itself router-free for its tests.
+  const consumeInitialTemplate = useCallback(() => {
+    setSearchParams((current) => {
+      if (!current.has("template")) return current;
+      const next = new URLSearchParams(current);
+      next.delete("template");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   // Stable identity: PaperWorkspace's poll effect depends on these callbacks.
   const onNotice = useCallback((message: string) => workspace.setMessage(message, "notice"), [workspace.setMessage]);
   return (
@@ -1193,6 +1208,8 @@ function PaperPage() {
       client={workspace.gateway}
       onError={workspace.setMessage}
       onNotice={onNotice}
+      initialTemplateId={initialTemplateId}
+      onInitialTemplateConsumed={consumeInitialTemplate}
     />
   );
 }
@@ -1378,11 +1395,13 @@ const BACKTEST_STRATEGIES: Array<{
 function NewBacktestPage() {
   const workspace = useWorkspace();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MarketSearchMarket[]>([]);
   const [selected, setSelected] = useState<MarketSearchMarket | null>(null);
   const [searching, setSearching] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [prefilledTemplate, setPrefilledTemplate] = useState<StrategyTemplate | null>(null);
   const [strategy, setStrategy] = useState<BacktestStrategy>("momentum_v1");
   const [common, setCommon] = useState<CommonBacktestFormState>({
     initialCapital: defaultMomentumBacktestConfig.initialCapital,
@@ -1411,12 +1430,11 @@ function NewBacktestPage() {
   const parsed = backtestConfigSchema.safeParse(configFromForm(strategy, common, drafts));
   const selectedStrategy = BACKTEST_STRATEGIES.find((item) => item.id === strategy)!;
 
-  const search = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!query.trim()) return;
+  const runSearch = useCallback(async (term: string) => {
+    if (!term.trim()) return;
     setSearching(true);
     try {
-      const response = await workspace.gateway.searchMarkets(query.trim(), "resolved", 20);
+      const response = await workspace.gateway.searchMarkets(term.trim(), "resolved", 20);
       setResults(response.events.flatMap((eventItem) => eventItem.markets).filter(isBacktestEligibleMarket));
       setSelected(null);
     } catch (caught) {
@@ -1424,6 +1442,39 @@ function NewBacktestPage() {
     } finally {
       setSearching(false);
     }
+  }, [workspace]);
+
+  // A ?template= link pre-fills the strategy picker and the market search
+  // once, then the param is stripped so a refresh does not re-run the search.
+  // The template's price-band offsets are deliberately NOT mapped onto the
+  // backtest config — different engine vocabulary — only the strategy family
+  // from backtestHint carries over.
+  const templateId = searchParams.get("template");
+  const initialTemplateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialTemplateRef.current !== null) return;
+    initialTemplateRef.current = templateId ?? "";
+    const template = templateId ? strategyTemplateById(templateId) : undefined;
+    if (!template) {
+      if (templateId) setSearchParams({}, { replace: true });
+      return;
+    }
+    setPrefilledTemplate(template);
+    setStrategy(template.backtestHint?.strategy ?? "mean_reversion_v1");
+    setQuery(template.suggestedSearchQuery);
+    void runSearch(template.suggestedSearchQuery);
+    setSearchParams((current) => {
+      if (!current.has("template")) return current;
+      const next = new URLSearchParams(current);
+      next.delete("template");
+      return next;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const search = async (event: FormEvent) => {
+    event.preventDefault();
+    await runSearch(query);
   };
 
   const launch = async () => {
@@ -1467,6 +1518,12 @@ function NewBacktestPage() {
 
         <section className="form-card">
           <div className="form-section-heading"><span>02</span><div><h2>Strategy and configuration</h2><p>Choose the entry signal, then tune its replay parameters.</p></div></div>
+          {prefilledTemplate ? (
+            <p className="template-chip template-chip-inline" role="status">
+              <span>Pre-filled from template · {prefilledTemplate.name}</span>
+              <button className="button button-quiet template-chip-clear" type="button" onClick={() => setPrefilledTemplate(null)}>Dismiss</button>
+            </p>
+          ) : null}
           <fieldset className="strategy-selector">
             <legend className="sr-only">Backtest strategy</legend>
             {BACKTEST_STRATEGIES.map((option) => (

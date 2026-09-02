@@ -813,6 +813,30 @@ describe("routed workspace", () => {
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`/backtests/${RUN_ID}`));
   });
 
+  it("pre-fills the backtest form from a ?template= link and strips the param", async () => {
+    mocks.searchMarkets.mockResolvedValue({
+      query: "crypto above",
+      state: "resolved",
+      observedAt: "2026-08-04T00:00:00.000Z",
+      events: [],
+    });
+    renderRoute("/backtests/new?template=ev-sniping");
+
+    expect(await screen.findByText("Pre-filled from template · EV sniping")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Mean reversion/i })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Search resolved markets" })).toHaveValue("crypto above");
+    await waitFor(() => expect(mocks.searchMarkets).toHaveBeenCalledWith("crypto above", "resolved", 20));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/backtests/new"));
+    expect(screen.getByTestId("location")).not.toHaveTextContent("template=");
+  });
+
+  it("ignores an unknown ?template= id and strips it", () => {
+    renderRoute("/backtests/new?template=does-not-exist");
+    expect(screen.queryByText(/Pre-filled from template/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("/backtests/new");
+    expect(screen.getByTestId("location")).not.toHaveTextContent("template=");
+  });
+
   it("confirms deletion and removes a non-streaming thread", async () => {
     const user = userEvent.setup();
     renderRoute(`/chat/${THREAD_A}`);

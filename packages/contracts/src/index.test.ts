@@ -23,6 +23,8 @@ import {
   paperStrategySnapshotSchema,
   paperStrategyStartRequestSchema,
   resolvedBinaryMarketWinner,
+  strategyTemplateListSchema,
+  strategyTemplates,
   tradingActionProposalSchema,
   walletSessionStatusSchema,
 } from "./index.js";
@@ -540,5 +542,35 @@ describe("agent prediction contracts", () => {
       recent: [],
       observedAt: "2026-09-01T00:00:00.000Z",
     }).totals.hitRatePct).toBeNull();
+  });
+});
+
+describe("strategy templates", () => {
+  it("ships a validated constant list of unique templates", () => {
+    const parsed = strategyTemplateListSchema.parse({ items: strategyTemplates });
+    expect(parsed.items.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(parsed.items.map((template) => template.id)).size).toBe(parsed.items.length);
+    for (const template of parsed.items) {
+      expect(template.strategyType).toBe("price_band_v1");
+      expect(template.stats.kind).toBe("illustrative");
+      expect(Number(template.band.exitOffset)).toBeGreaterThan(Number(template.band.entryOffset));
+    }
+  });
+
+  it("rejects an out-of-range offset or a malformed id", () => {
+    const template = strategyTemplates[0]!;
+    expect(
+      strategyTemplateListSchema.safeParse({ items: [{ ...template, id: "Bad Id" }] }).success,
+    ).toBe(false);
+    expect(
+      strategyTemplateListSchema.safeParse({
+        items: [{ ...template, band: { ...template.band, entryOffset: "0.75" } }],
+      }).success,
+    ).toBe(false);
+    expect(
+      strategyTemplateListSchema.safeParse({
+        items: [{ ...template, band: { ...template.band, exitOffset: "-0.04" } }],
+      }).success,
+    ).toBe(false);
   });
 });
