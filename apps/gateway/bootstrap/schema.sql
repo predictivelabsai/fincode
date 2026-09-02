@@ -430,6 +430,54 @@ INSERT INTO polytrade_agent.checkpoint_migrations (v)
 SELECT version FROM generate_series(0, 9) AS version
 ON CONFLICT (v) DO NOTHING;
 
+-- Agent prediction scorecard: falsifiable directional calls the agent records
+-- about specific markets, graded against Gamma resolution data. principal_id
+-- and thread_id are for auth and provenance only and must never appear in any
+-- public payload; the public aggregate exposes only the market question, the
+-- agent's outcome call, and the resolution.
+CREATE TABLE IF NOT EXISTS polytrade_agent.agent_predictions (
+    prediction_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    principal_id text NOT NULL,
+    thread_id uuid,
+    condition_id text NOT NULL,
+    token_id text,
+    market_question text NOT NULL CHECK (char_length(market_question) BETWEEN 1 AND 1000),
+    predicted_outcome text NOT NULL CHECK (char_length(predicted_outcome) BETWEEN 1 AND 200),
+    confidence numeric(6, 4) CHECK (confidence >= 0 AND confidence <= 1),
+    category text,
+    status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'GRADED', 'VOID')),
+    graded_outcome text,
+    hit boolean,
+    void_reason text,
+    tags jsonb,
+    market_slug text,
+    resolution_prices jsonb,
+    closed_time timestamptz,
+    made_at timestamptz NOT NULL DEFAULT now(),
+    graded_at timestamptz,
+    grade_attempts integer NOT NULL DEFAULT 0,
+    next_grade_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK ((status = 'GRADED') = (graded_outcome IS NOT NULL)),
+    CHECK (status <> 'VOID' OR void_reason IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS agent_predictions_pending_idx
+    ON polytrade_agent.agent_predictions (next_grade_at, made_at)
+    WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS agent_predictions_graded_idx
+    ON polytrade_agent.agent_predictions (status, graded_at DESC);
+CREATE INDEX IF NOT EXISTS agent_predictions_owner_idx
+    ON polytrade_agent.agent_predictions (principal_id, made_at DESC);
+-- One open call per (principal, market, outcome): tool retries are no-ops and
+-- a pending claim can't be duplicated while it is still ungraded.
+CREATE UNIQUE INDEX IF NOT EXISTS agent_predictions_open_claim_idx
+    ON polytrade_agent.agent_predictions (principal_id, condition_id, lower(predicted_outcome))
+    WHERE status = 'PENDING';
+
 CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_runs (
     run_id uuid PRIMARY KEY,
     principal_id text NOT NULL,

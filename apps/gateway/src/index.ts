@@ -1,5 +1,7 @@
 import pg from "pg";
 
+import { AgentPredictionGrader, PublicAgentAccuracyService } from "./agent-accuracy.js";
+import { PostgresAgentPredictionStore } from "./agent-prediction-store.js";
 import { AlertSender } from "./alert-sender.js";
 import { AlertDeliveryRunner, AlertService } from "./alert-service.js";
 import { PostgresAlertStore } from "./alert-store.js";
@@ -48,6 +50,12 @@ let reportAlertError: (error: unknown) => void = () => undefined;
 const alertsRunner = new AlertDeliveryRunner(alerts, {
   onError: (error) => reportAlertError(error),
 });
+const agentPredictions = new PostgresAgentPredictionStore(pool);
+const agentAccuracy = new PublicAgentAccuracyService(agentPredictions, new TtlCache());
+let reportGraderError: (error: unknown) => void = () => undefined;
+const predictionGrader = new AgentPredictionGrader(agentPredictions, polymarket, {
+  onError: (error) => reportGraderError(error),
+});
 const app = await buildApp({
   config,
   verifier: createJwtVerifier(config),
@@ -58,14 +66,18 @@ const app = await buildApp({
   paperStrategy,
   publicMarkets,
   trackRecords,
+  agentAccuracy,
   paperStrategyRunner,
   alerts,
   alertsRunner,
+  predictionGrader,
 });
 reportStrategyError = (error) => app.log.error({ err: error }, "paper strategy runner failed");
 reportAlertError = (error) => app.log.error({ err: error }, "alert delivery runner failed");
+reportGraderError = (error) => app.log.error({ err: error }, "prediction grader failed");
 paperStrategyRunner.start();
 alertsRunner.start();
+predictionGrader.start();
 
 let shuttingDown = false;
 const shutdown = async (signal: string) => {

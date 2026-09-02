@@ -1122,3 +1122,78 @@ export function isBacktestEligibleMarket(market: MarketSearchMarket): boolean {
     && startedAt !== null
     && Date.parse(startedAt) >= Date.parse(BACKTEST_CLOB_V2_START);
 }
+
+// The winning outcome of a resolved binary market is the one Gamma prices at
+// exactly 1. Anything ambiguous (50-50, malformed prices, still trading)
+// yields null so callers can void the grade instead of guessing.
+export function resolvedBinaryMarketWinner(market: MarketSearchMarket): string | null {
+  if (!market.closed || market.acceptingOrders) return null;
+  if (market.outcomes.length !== 2 || market.outcomePrices.length !== 2) return null;
+  const resolutionPrices = market.outcomePrices.map(Number);
+  if (!resolutionPrices.every(Number.isFinite)) return null;
+  const winners = market.outcomes.filter((_, index) => resolutionPrices[index] === 1);
+  if (winners.length !== 1) return null;
+  return winners[0]!;
+}
+
+export const confidenceString = z
+  .string()
+  .regex(
+    /^(0(\.\d{1,4})?|1(\.0{1,4})?)$/,
+    "Use a decimal string between 0 and 1 with at most 4 decimal places",
+  );
+
+export const agentPredictionRequestSchema = z.object({
+  conditionId: z.string().min(1).max(200),
+  tokenId: tokenId.optional(),
+  marketQuestion: z.string().min(1).max(1000),
+  predictedOutcome: z.string().min(1).max(200),
+  confidence: confidenceString.optional(),
+});
+
+export const agentPredictionStatusSchema = z.enum(["PENDING", "GRADED", "VOID"]);
+
+export const agentPredictionRecordSchema = agentPredictionRequestSchema.extend({
+  predictionId: z.string().uuid(),
+  status: agentPredictionStatusSchema,
+  madeAt: z.string().datetime(),
+  category: z.string().nullable(),
+});
+
+export const agentPredictionCategorySchema = z.object({
+  category: z.string(),
+  graded: z.number().int().nonnegative(),
+  hits: z.number().int().nonnegative(),
+  hitRatePct: z.string().nullable(),
+});
+
+export const agentPredictionRecentSchema = z.object({
+  marketQuestion: z.string(),
+  predictedOutcome: z.string(),
+  gradedOutcome: z.string().nullable(),
+  hit: z.boolean().nullable(),
+  madeAt: z.string().datetime(),
+  gradedAt: z.string().datetime().nullable(),
+  category: z.string().nullable(),
+});
+
+export const agentPredictionHitRateSchema = z.object({
+  totals: z.object({
+    graded: z.number().int().nonnegative(),
+    hits: z.number().int().nonnegative(),
+    hitRatePct: z.string().nullable(),
+    pending: z.number().int().nonnegative(),
+    voided: z.number().int().nonnegative(),
+    lastGradedAt: z.string().datetime().nullable(),
+  }),
+  byCategory: z.array(agentPredictionCategorySchema).max(8),
+  recent: z.array(agentPredictionRecentSchema).max(25),
+  observedAt: z.string().datetime(),
+});
+
+export type AgentPredictionRequest = z.infer<typeof agentPredictionRequestSchema>;
+export type AgentPredictionStatus = z.infer<typeof agentPredictionStatusSchema>;
+export type AgentPredictionRecord = z.infer<typeof agentPredictionRecordSchema>;
+export type AgentPredictionCategory = z.infer<typeof agentPredictionCategorySchema>;
+export type AgentPredictionRecent = z.infer<typeof agentPredictionRecentSchema>;
+export type AgentPredictionHitRate = z.infer<typeof agentPredictionHitRateSchema>;

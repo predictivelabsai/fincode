@@ -1,4 +1,6 @@
 import type {
+  AgentPredictionRequest,
+  AgentPredictionStatus,
   AlertChannelKind,
   AlertEventKind,
   PaperFill,
@@ -17,12 +19,20 @@ import { hashTypedData, verifyTypedData, type Address, type Hex } from "viem";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
+  AccuracySnapshot,
+  AgentPredictionRecord,
+  AgentPredictionStore,
+  PendingPrediction,
+  PredictionGrade,
+} from "../src/agent-prediction-store.js";
+import { hitRatePct } from "../src/agent-prediction-store.js";
+import type {
   AlertChannelRecord,
   AlertDeliveryRecord,
   AlertStore,
 } from "../src/alert-store.js";
 import { notFound } from "../src/errors.js";
-import type { PolymarketPort } from "../src/polymarket.js";
+import type { MarketResolution, PolymarketPort } from "../src/polymarket.js";
 import type {
   TrackRecordSnapshot,
   TrackRecordStore,
@@ -225,7 +235,9 @@ export class FakePolymarket implements PolymarketPort {
   paperFeeRates = new Map<string, string>();
   publicActiveMarkets: PublicMarketSummary[] = [];
   publicMarketDetail: PublicMarket | null = null;
-  requestCounts = { list: 0, detail: 0, orderBook: 0, priceHistory: 0 };
+  /** Scorecard override; null falls back to a derivation of paperMarket. */
+  marketResolution: MarketResolution | null = null;
+  requestCounts = { list: 0, detail: 0, orderBook: 0, priceHistory: 0, resolution: 0 };
 
   async searchMarkets() { return { events: [] }; }
   async listActiveMarkets(input: { limit: number; offset: number; order: string }) {
@@ -248,6 +260,19 @@ export class FakePolymarket implements PolymarketPort {
   }
   async getMarketByCondition() {
     return { market: this.paperMarket, observedAt: "2026-08-03T00:00:00.000Z" };
+  }
+  async getMarketResolution(conditionId: string): Promise<MarketResolution> {
+    this.requestCounts.resolution += 1;
+    if (this.marketResolution) return this.marketResolution;
+    const market: MarketSearchMarket = { ...this.paperMarket, conditionId };
+    return {
+      market,
+      winner: null,
+      closedTime: market.closedTime,
+      category: null,
+      tags: [],
+      observedAt: "2026-08-03T00:00:00.000Z",
+    };
   }
   async getOrderBook(tokenId: string) {
     this.requestCounts.orderBook += 1;
@@ -693,5 +718,228 @@ export class MemoryTrackRecordStore implements TrackRecordStore {
     const snapshot = this.snapshots[principalId];
     if (!snapshot) throw notFound("Track record not found");
     return snapshot;
+  }
+}
+
+interface StoredPrediction {
+  predictionId: string;
+  principalId: string;
+  conditionId: string;
+  tokenId: string | null;
+  marketQuestion: string;
+  predictedOutcome: string;
+  confidence: string | null;
+  category: string | null;
+  status: AgentPredictionStatus;
+  gradedOutcome: string | null;
+  hit: boolean | null;
+  voidReason: string | null;
+  tags: string[];
+  marketSlug: string | null;
+  resolutionPrices: string[];
+  closedTime: Date | null;
+  madeAt: Date;
+  gradedAt: Date | null;
+  gradeAttempts: number;
+  nextGradeAt: Date;
+  leaseOwner: string | null;
+  leaseUntil: Date | null;
+}
+
+function predictionRow(row: StoredPrediction): AgentPredictionRecord {
+  return {
+    predictionId: row.predictionId,
+    conditionId: row.conditionId,
+    tokenId: row.tokenId,
+    marketQuestion: row.marketQuestion,
+    predictedOutcome: row.predictedOutcome,
+    confidence: row.confidence,
+    category: row.category,
+    status: row.status,
+    gradedOutcome: row.gradedOutcome,
+    hit: row.hit,
+    voidReason: row.voidReason,
+    madeAt: row.madeAt.toISOString(),
+    gradedAt: row.gradedAt?.toISOString() ?? null,
+  };
+}
+
+/** In-memory mirror of the agent_predictions table semantics. */
+export class MemoryAgentPredictionStore implements AgentPredictionStore {
+  readonly predictions = new Map<string, StoredPrediction>();
+
+  async record(
+    principalId: string,
+    input: AgentPredictionRequest,
+    now: Date,
+  ): Promise<AgentPredictionRecord> {
+    const existing = [...this.predictions.values()].find(
+      (row) => row.principalId === principalId
+        && row.conditionId === input.conditionId
+        && row.predictedOutcome.toLowerCase() === input.predictedOutcome.toLowerCase()
+        && row.status === "PENDING",
+    );
+    if (existing) return predictionRow(existing);
+    const row: StoredPrediction = {
+      predictionId: randomUUID(),
+      principalId,
+      conditionId: input.conditionId,
+      tokenId: input.tokenId ?? null,
+      marketQuestion: input.marketQuestion,
+      predictedOutcome: input.predictedOutcome,
+      confidence: input.confidence ?? null,
+      category: null,
+      status: "PENDING",
+      gradedOutcome: null,
+      hit: null,
+      voidReason: null,
+      tags: [],
+      marketSlug: null,
+      resolutionPrices: [],
+      closedTime: null,
+      madeAt: now,
+      gradedAt: null,
+      gradeAttempts: 0,
+      nextGradeAt: now,
+      leaseOwner: null,
+      leaseUntil: null,
+    };
+    this.predictions.set(row.predictionId, row);
+    return predictionRow(row);
+  }
+
+  async claimPending(
+    owner: string,
+    now: Date,
+    leaseUntil: Date,
+    graceMs: number,
+    limit: number,
+  ): Promise<PendingPrediction[]> {
+    const cutoff = now.getTime() - graceMs;
+    const due = [...this.predictions.values()]
+      .filter((row) => row.status === "PENDING"
+        && row.nextGradeAt.getTime() <= now.getTime()
+        && row.madeAt.getTime() <= cutoff
+        && (row.leaseUntil === null || row.leaseUntil.getTime() <= now.getTime()))
+      .sort((left, right) => left.nextGradeAt.getTime() - right.nextGradeAt.getTime()
+        || left.madeAt.getTime() - right.madeAt.getTime()
+        || left.predictionId.localeCompare(right.predictionId))
+      .slice(0, limit);
+    for (const row of due) {
+      row.leaseOwner = owner;
+      row.leaseUntil = leaseUntil;
+    }
+    return due.map((row) => ({
+      predictionId: row.predictionId,
+      conditionId: row.conditionId,
+      tokenId: row.tokenId,
+      marketQuestion: row.marketQuestion,
+      predictedOutcome: row.predictedOutcome,
+      madeAt: row.madeAt,
+      gradeAttempts: row.gradeAttempts,
+    }));
+  }
+
+  async grade(predictionId: string, owner: string, grade: PredictionGrade, now: Date): Promise<void> {
+    const row = this.predictions.get(predictionId);
+    if (!row || row.leaseOwner !== owner) return;
+    row.status = "GRADED";
+    row.gradedOutcome = grade.gradedOutcome;
+    row.hit = grade.hit;
+    row.category = grade.category;
+    row.tags = [...grade.tags];
+    row.marketSlug = grade.marketSlug;
+    row.resolutionPrices = [...grade.resolutionPrices];
+    row.closedTime = grade.closedTime;
+    row.gradedAt = grade.gradedAt;
+    row.leaseOwner = null;
+    row.leaseUntil = null;
+    row.nextGradeAt = now;
+  }
+
+  async voidOut(predictionId: string, owner: string, reason: string, now: Date): Promise<void> {
+    const row = this.predictions.get(predictionId);
+    if (!row || row.leaseOwner !== owner) return;
+    row.status = "VOID";
+    row.voidReason = reason;
+    row.gradedAt = now;
+    row.leaseOwner = null;
+    row.leaseUntil = null;
+    row.nextGradeAt = now;
+  }
+
+  async reschedule(
+    predictionId: string,
+    owner: string,
+    attempts: number,
+    nextGradeAt: Date,
+    now: Date,
+  ): Promise<void> {
+    const row = this.predictions.get(predictionId);
+    if (!row || row.leaseOwner !== owner) return;
+    row.gradeAttempts = attempts;
+    row.nextGradeAt = nextGradeAt;
+    row.leaseOwner = null;
+    row.leaseUntil = null;
+  }
+
+  async releaseClaim(predictionId: string, owner: string, nextGradeAt: Date, _now: Date): Promise<void> {
+    const row = this.predictions.get(predictionId);
+    if (!row || row.leaseOwner !== owner) return;
+    row.nextGradeAt = nextGradeAt;
+    row.leaseOwner = null;
+    row.leaseUntil = null;
+  }
+
+  async accuracySnapshot(recentLimit: number): Promise<AccuracySnapshot> {
+    const rows = [...this.predictions.values()];
+    const gradedRows = rows.filter((row) => row.status === "GRADED");
+    const hits = gradedRows.filter((row) => row.hit).length;
+    const lastGraded = gradedRows
+      .map((row) => row.gradedAt)
+      .filter((value): value is Date => value !== null)
+      .sort((left, right) => right.getTime() - left.getTime())[0];
+    const byCategoryMap = new Map<string, { graded: number; hits: number }>();
+    for (const row of gradedRows) {
+      const category = row.category && row.category !== "" ? row.category : "Other";
+      const bucket = byCategoryMap.get(category) ?? { graded: 0, hits: 0 };
+      bucket.graded += 1;
+      if (row.hit) bucket.hits += 1;
+      byCategoryMap.set(category, bucket);
+    }
+    const byCategory = [...byCategoryMap.entries()]
+      .sort((left, right) => right[1].graded - left[1].graded || left[0].localeCompare(right[0]))
+      .slice(0, 8)
+      .map(([category, bucket]) => ({
+        category,
+        graded: bucket.graded,
+        hits: bucket.hits,
+        hitRatePct: hitRatePct(bucket.graded, bucket.hits),
+      }));
+    const recent = gradedRows
+      .sort((left, right) => (right.gradedAt?.getTime() ?? 0) - (left.gradedAt?.getTime() ?? 0)
+        || left.predictionId.localeCompare(right.predictionId))
+      .slice(0, recentLimit)
+      .map((row) => ({
+        marketQuestion: row.marketQuestion,
+        predictedOutcome: row.predictedOutcome,
+        gradedOutcome: row.gradedOutcome,
+        hit: row.hit,
+        madeAt: row.madeAt.toISOString(),
+        gradedAt: row.gradedAt?.toISOString() ?? null,
+        category: row.category,
+      }));
+    return {
+      totals: {
+        graded: gradedRows.length,
+        hits,
+        hitRatePct: hitRatePct(gradedRows.length, hits),
+        pending: rows.filter((row) => row.status === "PENDING").length,
+        voided: rows.filter((row) => row.status === "VOID").length,
+        lastGradedAt: lastGraded?.toISOString() ?? null,
+      },
+      byCategory,
+      recent,
+    };
   }
 }

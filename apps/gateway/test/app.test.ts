@@ -5,17 +5,20 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { strategyTemplateListSchema } from "@polytrade/contracts";
 
+import { agentPredictionHitRateSchema } from "@polytrade/contracts";
+
 import { AlertSender } from "../src/alert-sender.js";
 import { AlertService } from "../src/alert-service.js";
 import { buildApp } from "../src/app.js";
 import { parseConfig } from "../src/config.js";
 import { CredentialCipher } from "../src/crypto.js";
 import { AppError, unauthorized } from "../src/errors.js";
+import { PublicAgentAccuracyService } from "../src/agent-accuracy.js";
 import { PublicMarketService } from "../src/public-market.js";
 import { TtlCache } from "../src/public-cache.js";
 import { PublicTrackRecordService } from "../src/track-record.js";
 import type { Principal } from "../src/types.js";
-import { FakePolymarket, MemoryAlertStore, MemoryTrackRecordStore, MemoryTradingStore, publicMarketSummaryFixture, trackRecordSnapshotFixture } from "./fakes.js";
+import { FakePolymarket, MemoryAgentPredictionStore, MemoryAlertStore, MemoryTrackRecordStore, MemoryTradingStore, publicMarketSummaryFixture, trackRecordSnapshotFixture } from "./fakes.js";
 
 const principal: Principal = {
   id: "assethero:user-1",
@@ -200,6 +203,8 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
   const trackRecordStore = new MemoryTrackRecordStore();
   trackRecordStore.snapshots[principal.id] = trackRecordSnapshotFixture();
   const trackRecords = new PublicTrackRecordService(trackRecordStore, new TtlCache());
+  const predictionStore = new MemoryAgentPredictionStore();
+  const agentAccuracy = new PublicAgentAccuracyService(predictionStore, new TtlCache());
   const app = await buildApp({
     config: config(trustedProxies, configOverrides),
     verifier: { verifyAuthorization: async (header: string | undefined, scope: string) => {
@@ -216,6 +221,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     alerts,
     publicMarkets: new PublicMarketService(polymarket, new TtlCache()),
     trackRecords,
+    agentAccuracy,
   });
   await app.ready();
   return {
@@ -229,6 +235,7 @@ async function setup(trustedProxies?: string, configOverrides: NodeJS.ProcessEnv
     alertStore,
     alertRequests,
     trackRecordStore,
+    predictionStore,
     polymarket,
   };
 }
@@ -884,6 +891,100 @@ describe("gateway HTTP boundary", () => {
       await app.close();
       await agent.close();
     }
+  });
+});
+
+describe("agent prediction boundary", () => {
+  const headers = {
+    authorization: "Bearer token",
+    "content-type": "application/json",
+    "idempotency-key": "agent-prediction-key-1",
+  };
+  const body = {
+    conditionId: "0xcondition",
+    tokenId: "123",
+    marketQuestion: "Will the Fed hold rates in September?",
+    predictedOutcome: "Yes",
+    confidence: "0.62",
+  };
+
+  it("requires research auth to record a prediction", async () => {
+    const { app, predictionStore, verifiedScopes } = await setup();
+    const unauth = await app.inject({ method: "POST", url: "/v1/agent/predictions", payload: body });
+    expect(unauth.statusCode).toBe(401);
+    expect(predictionStore.predictions.size).toBe(0);
+
+    const recorded = await app.inject({ method: "POST", url: "/v1/agent/predictions", headers, payload: body });
+    expect(recorded.statusCode).toBe(200);
+    expect(verifiedScopes).toEqual(["research"]);
+    const record = recorded.json();
+    expect(record).toMatchObject({ conditionId: "0xcondition", predictedOutcome: "Yes", status: "PENDING", category: null });
+    expect(record.predictionId).toBeDefined();
+    // The response is public-safe by construction: no principal or thread fields.
+    expect(recorded.body).not.toContain(principal.id);
+    expect(recorded.body).not.toContain("principalId");
+    expect(recorded.body).not.toContain("threadId");
+    expect(predictionStore.predictions.size).toBe(1);
+    await app.close();
+  });
+
+  it("returns the original row when the same open call is recorded twice", async () => {
+    const { app, predictionStore } = await setup();
+    const first = await app.inject({
+      method: "POST", url: "/v1/agent/predictions",
+      headers, payload: body,
+    });
+    const retry = await app.inject({
+      method: "POST", url: "/v1/agent/predictions",
+      headers: { ...headers, "idempotency-key": "agent-prediction-key-2" },
+      payload: { ...body, confidence: "0.90" },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().predictionId).toBe(first.json().predictionId);
+    expect(predictionStore.predictions.size).toBe(1);
+    await app.close();
+  });
+
+  it("serves an empty accuracy aggregate before anything is recorded", async () => {
+    const { app } = await setup();
+    const response = await app.inject({ method: "GET", url: "/v1/public/agent-accuracy" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("public, max-age=60");
+    expect(agentPredictionHitRateSchema.parse(response.json()).totals).toEqual({
+      graded: 0, hits: 0, hitRatePct: null, pending: 0, voided: 0, lastGradedAt: null,
+    });
+    await app.close();
+  });
+
+  it("serves the public accuracy aggregate without any identity fields", async () => {
+    const { app, predictionStore, polymarket } = await setup();
+    const recorded = await app.inject({ method: "POST", url: "/v1/agent/predictions", headers, payload: body });
+    expect(recorded.statusCode).toBe(200);
+    const [row] = [...predictionStore.predictions.values()];
+    row!.status = "GRADED";
+    row!.gradedOutcome = "Yes";
+    row!.hit = true;
+    row!.gradedAt = new Date("2026-09-02T12:00:00.000Z");
+    row!.category = "Economics";
+    polymarket.requestCounts.resolution = 0;
+
+    const after = await app.inject({ method: "GET", url: "/v1/public/agent-accuracy" });
+    expect(after.statusCode).toBe(200);
+    expect(after.headers["cache-control"]).toBe("public, max-age=60");
+    const parsed = agentPredictionHitRateSchema.parse(after.json());
+    expect(parsed.totals).toMatchObject({ graded: 1, hits: 1, pending: 0 });
+    expect(parsed.byCategory).toEqual([{ category: "Economics", graded: 1, hits: 1, hitRatePct: "100.00" }]);
+    expect(parsed.recent).toHaveLength(1);
+    // Aggregate never carries the caller identity.
+    expect(after.body).not.toContain(principal.id);
+    expect(after.body).not.toContain("principalId");
+    expect(after.body).not.toContain("threadId");
+    // Served from the TTL cache: no store re-read, no extra work.
+    const repeat = await app.inject({ method: "GET", url: "/v1/public/agent-accuracy" });
+    expect(repeat.json().totals.graded).toBe(1);
+    expect(polymarket.requestCounts.resolution).toBe(0);
+    await app.close();
   });
 });
 
