@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
+import { strategyTemplateListSchema } from "@polytrade/contracts";
 
 import { AlertSender } from "../src/alert-sender.js";
 import { AlertService } from "../src/alert-service.js";
@@ -345,6 +346,20 @@ describe("gateway HTTP boundary", () => {
     expect(createGuarded.statusCode).toBe(401);
     const deleteGuarded = await app.inject({ method: "DELETE", url: "/v1/paper/share" });
     expect(deleteGuarded.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("serves the strategy template list publicly without authentication", async () => {
+    const { app } = await setup();
+
+    const response = await app.inject({ method: "GET", url: "/v1/public/strategy-templates" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toContain("max-age=");
+    const parsed = strategyTemplateListSchema.parse(response.json());
+    expect(parsed.items.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(parsed.items.map((template) => template.id)).size).toBe(parsed.items.length);
+    // The payload is a static constant: no per-principal data can appear.
+    expect(response.body).not.toContain(principal.id);
     await app.close();
   });
 
