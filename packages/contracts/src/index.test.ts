@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   accountOverviewSchema,
+  agentPredictionHitRateSchema,
+  agentPredictionRequestSchema,
   alertChannelSchema,
   alertCreateChannelRequestSchema,
   alertEventKindSchema,
@@ -20,6 +22,7 @@ import {
   publicTrackRecordSchema,
   paperStrategySnapshotSchema,
   paperStrategyStartRequestSchema,
+  resolvedBinaryMarketWinner,
   tradingActionProposalSchema,
   walletSessionStatusSchema,
 } from "./index.js";
@@ -422,5 +425,120 @@ describe("publicTrackRecordSchema", () => {
       createdAt: null,
       updatedAt: null,
     }).token).toBeNull();
+  });
+});
+
+describe("resolvedBinaryMarketWinner", () => {
+  const market = {
+    id: "market-1",
+    conditionId: "condition-1",
+    slug: "market-1",
+    question: "Will this resolve Yes?",
+    description: "",
+    outcomes: ["Yes", "No"],
+    outcomePrices: ["1", "0"],
+    clobTokenIds: ["101", "202"],
+    active: false,
+    closed: true,
+    acceptingOrders: false,
+    enableOrderBook: true,
+    archived: false,
+    restricted: false,
+    minimumOrderSize: "5",
+    minimumTickSize: "0.01",
+    endDate: "2026-05-01T02:00:00.000Z",
+    startDate: "2026-05-01T00:00:00.000Z",
+    createdAt: "2026-05-01T00:00:00.000Z",
+    closedTime: "2026-05-01T02:00:00.000Z",
+    liquidity: "100",
+    volume: "1000",
+  };
+
+  it("returns the outcome priced at exactly 1", () => {
+    expect(resolvedBinaryMarketWinner(market)).toBe("Yes");
+    expect(resolvedBinaryMarketWinner({ ...market, outcomePrices: ["0", "1"] })).toBe("No");
+  });
+
+  it("returns null while the market is still open", () => {
+    expect(resolvedBinaryMarketWinner({ ...market, closed: false })).toBeNull();
+    expect(resolvedBinaryMarketWinner({ ...market, acceptingOrders: true })).toBeNull();
+  });
+
+  it("returns null for ambiguous or malformed resolutions", () => {
+    expect(resolvedBinaryMarketWinner({ ...market, outcomePrices: ["0.5", "0.5"] })).toBeNull();
+    expect(resolvedBinaryMarketWinner({ ...market, outcomePrices: ["x", "1"] })).toBeNull();
+    expect(resolvedBinaryMarketWinner({ ...market, outcomes: ["Yes"] })).toBeNull();
+    expect(resolvedBinaryMarketWinner({ ...market, outcomePrices: [] })).toBeNull();
+  });
+});
+
+describe("agent prediction contracts", () => {
+  it("accepts a well-formed prediction request", () => {
+    expect(agentPredictionRequestSchema.parse({
+      conditionId: "0xabc",
+      tokenId: "123",
+      marketQuestion: "Will X win?",
+      predictedOutcome: "Yes",
+      confidence: "0.75",
+    }).confidence).toBe("0.75");
+    expect(agentPredictionRequestSchema.parse({
+      conditionId: "0xabc",
+      marketQuestion: "Will X win?",
+      predictedOutcome: "No",
+    }).confidence).toBeUndefined();
+  });
+
+  it("rejects out-of-range confidence and oversized fields", () => {
+    expect(agentPredictionRequestSchema.safeParse({
+      conditionId: "0xabc",
+      marketQuestion: "q",
+      predictedOutcome: "Yes",
+      confidence: "1.01",
+    }).success).toBe(false);
+    expect(agentPredictionRequestSchema.safeParse({
+      conditionId: "0xabc",
+      marketQuestion: "q",
+      predictedOutcome: "Yes",
+      confidence: "0.12345",
+    }).success).toBe(false);
+    expect(agentPredictionRequestSchema.safeParse({
+      conditionId: "0xabc",
+      marketQuestion: "q",
+      predictedOutcome: "Yes",
+      tokenId: "abc",
+    }).success).toBe(false);
+  });
+
+  it("parses the public hit-rate aggregate with nullable rates", () => {
+    const parsed = agentPredictionHitRateSchema.parse({
+      totals: {
+        graded: 214,
+        hits: 130,
+        hitRatePct: "60.75",
+        pending: 3,
+        voided: 1,
+        lastGradedAt: "2026-09-01T00:00:00.000Z",
+      },
+      byCategory: [{ category: "Politics", graded: 100, hits: 61, hitRatePct: "61.00" }],
+      recent: [{
+        marketQuestion: "Will X win?",
+        predictedOutcome: "Yes",
+        gradedOutcome: "Yes",
+        hit: true,
+        madeAt: "2026-08-01T00:00:00.000Z",
+        gradedAt: "2026-08-02T00:00:00.000Z",
+        category: "Politics",
+      }],
+      observedAt: "2026-09-01T00:00:00.000Z",
+    });
+    expect(parsed.totals.hitRatePct).toBe("60.75");
+    expect(agentPredictionHitRateSchema.parse({
+      totals: {
+        graded: 0, hits: 0, hitRatePct: null, pending: 0, voided: 0, lastGradedAt: null,
+      },
+      byCategory: [],
+      recent: [],
+      observedAt: "2026-09-01T00:00:00.000Z",
+    }).totals.hitRatePct).toBeNull();
   });
 });

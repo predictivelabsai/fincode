@@ -5,6 +5,9 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import {
   accountOverviewSchema,
+  agentPredictionHitRateSchema,
+  agentPredictionRecordSchema,
+  agentPredictionRequestSchema,
   alertChannelListSchema,
   alertChannelSchema,
   alertCreateChannelRequestSchema,
@@ -39,6 +42,7 @@ import type { Hex } from "viem";
 import { z } from "zod";
 
 import type { AlertService } from "./alert-service.js";
+import { ACCURACY_CACHE_TTL_MS, type PublicAgentAccuracyService } from "./agent-accuracy.js";
 import type { JwtVerifier } from "./auth.js";
 import type { GatewayConfig } from "./config.js";
 import { AppError, conflict, forbidden, validation } from "./errors.js";
@@ -62,9 +66,11 @@ export interface AppDependencies {
   paperStrategy: PaperStrategyService;
   publicMarkets: PublicMarketService;
   trackRecords: PublicTrackRecordService;
+  agentAccuracy: PublicAgentAccuracyService;
   paperStrategyRunner?: { close(): Promise<void> };
   alerts: AlertService;
   alertsRunner?: { close(): Promise<void> };
+  predictionGrader?: { close(): Promise<void> };
 }
 
 const marketQuery = z.object({
@@ -283,6 +289,32 @@ export async function buildApp(deps: AppDependencies) {
     return deps.trackRecords.detail(token);
   });
 
+  // Agent prediction capture: the chat agent records a falsifiable call on a
+  // live market through its delegated research bearer. Responses are public-
+  // safe by construction — no principal or thread fields exist on the record.
+  app.post("/v1/agent/predictions", {
+    preHandler: authenticate("research"),
+    schema: {
+      tags: ["agent"],
+      body: agentPredictionRequestSchema,
+      response: { 200: agentPredictionRecordSchema },
+    },
+  }, (request) => {
+    const body = agentPredictionRequestSchema.parse(request.body);
+    return runIdempotent(request, "agent-prediction.record", body, () =>
+      deps.agentAccuracy.record(principal(request).id, body));
+  });
+
+  // Public accuracy scorecard: aggregate hit rates only — the aggregate query
+  // never selects principal or thread columns.
+  app.get("/v1/public/agent-accuracy", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], response: { 200: agentPredictionHitRateSchema } },
+  }, async (_request, reply) => {
+    reply.header("Cache-Control", cacheHeader(ACCURACY_CACHE_TTL_MS));
+    return deps.agentAccuracy.snapshot();
+  });
+
   app.get("/v1/paper/portfolio", {
     preHandler: authenticate("research"),
     schema: { tags: ["paper"], response: { 200: paperPortfolioSchema } },
@@ -472,6 +504,7 @@ export async function buildApp(deps: AppDependencies) {
   });
 
   app.addHook("onClose", async () => {
+    await deps.predictionGrader?.close();
     await deps.alertsRunner?.close();
     await deps.paperStrategyRunner?.close();
     await deps.store.close();

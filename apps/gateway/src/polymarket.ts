@@ -13,6 +13,7 @@ import {
 import {
   isBacktestEligibleMarket,
   marketSearchMarketSchema,
+  resolvedBinaryMarketWinner,
   type CancellationSelector,
   type CreateOrderProposal,
   type MarketSearchMarket,
@@ -49,6 +50,33 @@ const gammaMarketMetadataSchema = z
 const gammaMarketsResponse = z.array(gammaMarketMetadataSchema);
 const feeRateResponse = z.object({ base_fee: z.number().int().nonnegative() });
 const positionsResponse = z.array(objectRecord);
+const gammaEventTagsResponse = z
+  .object({
+    category: z.string().nullish(),
+    tags: z.array(z.object({ label: z.string().min(1) }).passthrough()).nullish(),
+  })
+  .passthrough();
+
+export interface MarketResolution {
+  market: MarketSearchMarket;
+  winner: string | null;
+  closedTime: string | null;
+  category: string | null;
+  tags: string[];
+  observedAt: string;
+}
+
+/**
+ * Pick the scorecard category from an event's Gamma tags. The tag list is
+ * ordered specific -> generic, so the first non-"All" label is the most
+ * informative; the event's own category string is the fallback.
+ */
+export function pickCategory(tags: string[], eventCategory: string | null): string | null {
+  const tag = tags.find((label) => label.trim().toLowerCase() !== "all" && label.trim().length > 0);
+  if (tag) return tag.trim();
+  const category = eventCategory?.trim();
+  return category ? category : null;
+}
 
 type GammaMarketMetadata = z.infer<typeof gammaMarketMetadataSchema>;
 type ProposalMarketIdentity = Pick<
@@ -67,6 +95,7 @@ export interface PolymarketPort {
   getMarket(identifier: string, kind: "id" | "slug"): Promise<unknown>;
   getPublicMarket(slug: string): Promise<unknown>;
   getMarketByCondition(conditionId: string): Promise<{ market: MarketSearchMarket; observedAt: string }>;
+  getMarketResolution(conditionId: string): Promise<MarketResolution>;
   getOrderBook(tokenId: string): Promise<unknown>;
   getFeeRate(tokenId: string): Promise<string>;
   getPriceHistory(tokenId: string, interval: string): Promise<unknown>;
@@ -243,6 +272,15 @@ export class PolymarketAdapter implements PolymarketPort {
   }
 
   async getMarketByCondition(conditionId: string): Promise<{ market: MarketSearchMarket; observedAt: string }> {
+    const { market, observedAt } = await this.fetchMarketByCondition(conditionId);
+    return { market, observedAt };
+  }
+
+  private async fetchMarketByCondition(conditionId: string): Promise<{
+    market: MarketSearchMarket;
+    raw: Record<string, unknown>;
+    observedAt: string;
+  }> {
     const url = new URL("/markets", this.config.POLYMARKET_GAMMA_URL);
     url.searchParams.set("condition_ids", conditionId);
     url.searchParams.set("limit", "2");
@@ -252,7 +290,40 @@ export class PolymarketAdapter implements PolymarketPort {
     if (matches.length !== 1) throw unavailable("Polymarket returned ambiguous market metadata");
     const market = marketSearchMarketSchema.safeParse(normalizeMarket(matches[0]!));
     if (!market.success) throw unavailable("Polymarket returned malformed market metadata");
-    return { market: market.data, observedAt: new Date().toISOString() };
+    return { market: market.data, raw: matches[0]!, observedAt: new Date().toISOString() };
+  }
+
+  /**
+   * Resolution + category lookup for the prediction scorecard. Gamma prices
+   * the winning binary outcome at exactly 1. The /markets payload carries no
+   * tags, so the category needs a second event-slug fetch; a failure there
+   * degrades to a null category instead of failing the grade.
+   */
+  async getMarketResolution(conditionId: string): Promise<MarketResolution> {
+    const { market, raw, observedAt } = await this.fetchMarketByCondition(conditionId);
+    const winner = resolvedBinaryMarketWinner(market);
+    let tags: string[] = [];
+    let category: string | null = null;
+    const events = raw.events;
+    const eventSlug = Array.isArray(events)
+      ? String((events[0] as Record<string, unknown> | undefined)?.slug ?? "")
+      : "";
+    if (eventSlug) {
+      try {
+        const event = await this.fetchJson(
+          new URL(
+            `/events/slug/${encodeURIComponent(eventSlug)}?include_tags=true`,
+            this.config.POLYMARKET_GAMMA_URL,
+          ),
+          gammaEventTagsResponse,
+        );
+        tags = (event.tags ?? []).map((tag) => tag.label);
+        category = pickCategory(tags, event.category ?? null);
+      } catch {
+        // Tags are optional enrichment; grading proceeds without a category.
+      }
+    }
+    return { market, winner, closedTime: market.closedTime, category, tags, observedAt };
   }
 
   async getOrderBook(tokenId: string): Promise<unknown> {
