@@ -23,6 +23,8 @@ import {
   paperStrategySnapshotSchema,
   paperStrategyStartRequestSchema,
   publicTrackRecordSchema,
+  strategyTemplateListSchema,
+  strategyTemplates,
   submitIntentRequestSchema,
   walletChallengeRequestSchema,
   walletSessionRequestSchema,
@@ -281,6 +283,16 @@ export async function buildApp(deps: AppDependencies) {
     const { token } = trackRecordParams.parse(request.params);
     reply.header("Cache-Control", cacheHeader(TRACK_RECORD_CACHE_TTL_MS.detail));
     return deps.trackRecords.detail(token);
+  });
+
+  // Strategy templates are a static constant from contracts — no store, no
+  // per-principal data, so this route just serializes the list.
+  app.get("/v1/public/strategy-templates", {
+    ...publicRouteOptions,
+    schema: { tags: ["public"], security: [], response: { 200: strategyTemplateListSchema } },
+  }, async (_request, reply) => {
+    reply.header("Cache-Control", cacheHeader(60_000));
+    return { items: strategyTemplates };
   });
 
   app.get("/v1/paper/portfolio", {
