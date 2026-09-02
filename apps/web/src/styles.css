@@ -4632,6 +4632,240 @@ th small {
   flex-wrap: wrap;
 }
 
+/* Strategy templates */
+
+.template-grid-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.template-grid-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.template-grid-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.template-grid-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--pane);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.template-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-card-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.template-card-kind {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.template-card-tagline {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.template-card-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.template-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--accent-wash, transparent);
+  border-radius: 8px;
+}
+
+.template-card-stats div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-card-stats dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.template-card-stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.template-card-basis {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.template-card-actions {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--accent-wash, transparent);
+  font-size: 0.8rem;
+}
+
+.template-chip-clear {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.template-chip-inline {
+  margin: 0 0 12px;
+}
+
+/* Public /templates landing page */
+.template-landing-hero {
+  max-width: 720px;
+  padding: 32px 0 8px;
+}
+
+.template-landing-hero h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  line-height: 1.1;
+}
+
+.template-landing-hero p {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.template-landing-cta {
+  margin-bottom: 8px;
+}
+
+.template-grid-landing {
+  margin-top: 24px;
+}
+
+.template-grid-landing .template-card-description {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.template-landing-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.template-landing-steps article {
+  padding: 20px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--pane);
+}
+
+.template-landing-steps svg {
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.template-landing-steps h2 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.template-landing-steps p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.template-landing-footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.template-landing-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.template-landing-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 700px) {
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .template-landing-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

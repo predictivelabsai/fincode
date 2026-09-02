@@ -544,6 +544,165 @@ export const paperStrategySnapshotSchema = z.object({
   events: z.array(paperStrategyEventSchema),
 });
 
+// Strategy templates are pre-tuned parameter sets for the paper price-band
+// engine, shipped as a constant in this package. Offsets are relative to the
+// selected outcome token's reference price; absolute prices are computed at
+// apply time in the web app.
+const templateOffsetString = signedDecimalString.refine(
+  (value) => Math.abs(Number(value)) <= 0.5,
+  "Offset must be within half a dollar of the reference price",
+);
+
+export const strategyTemplateBandSchema = z.object({
+  entryOffset: templateOffsetString,
+  exitOffset: templateOffsetString,
+  sharesPerOrder: positiveDecimalString,
+  positionMultiplier: positiveDecimalString,
+  intervalSeconds: z.number().int().min(5).max(3_600),
+}).superRefine((value, ctx) => {
+  if (Number(value.exitOffset) <= Number(value.entryOffset)) {
+    ctx.addIssue({ code: "custom", path: ["exitOffset"], message: "Exit offset must exceed entry offset" });
+  }
+});
+
+export const strategyTemplateStatsSchema = z.object({
+  kind: z.literal("illustrative"),
+  returnPct: decimalString,
+  winRatePct: decimalString,
+  tradeCount: z.number().int().nonnegative(),
+  maxDrawdownPct: decimalString,
+  basis: z.string().min(10).max(200),
+});
+
+export const strategyTemplateSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,47}$/, "Use a kebab-case id of 2-48 characters"),
+  strategyType: z.literal("price_band_v1").default("price_band_v1"),
+  name: z.string().min(3).max(48),
+  tagline: z.string().min(10).max(110),
+  description: z.string().min(20).max(600),
+  suggestedSearchQuery: z.string().min(2).max(60),
+  outcomePick: z.enum(["higher_price", "lower_price"]),
+  band: strategyTemplateBandSchema,
+  stats: strategyTemplateStatsSchema,
+  backtestHint: z.object({
+    strategy: z.enum(["momentum_v1", "mean_reversion_v1", "breakout_v1"]),
+    note: z.string().min(5).max(160),
+  }).optional(),
+});
+
+export const strategyTemplateListSchema = z.object({
+  items: z.array(strategyTemplateSchema).min(1).max(12),
+});
+
+export const strategyTemplates = strategyTemplateListSchema.parse({
+  items: [
+    {
+      id: "base-rate-divergence",
+      name: "Base-rate divergence",
+      tagline: "Buy the favourite a few cents under the tape.",
+      description:
+        "Bids below the going price on the market favourite and scales out as the market prices in the base rate. " +
+        "Suited to liquid markets where the odds move slowly and dips are noise rather than news.",
+      suggestedSearchQuery: "fed decision",
+      outcomePick: "higher_price",
+      band: { entryOffset: "-0.03", exitOffset: "0.04", sharesPerOrder: "10", positionMultiplier: "5", intervalSeconds: 60 },
+      stats: {
+        kind: "illustrative",
+        returnPct: "6.40",
+        winRatePct: "68.00",
+        tradeCount: 124,
+        maxDrawdownPct: "3.10",
+        basis: "Illustrative backtest · 42 resolved markets · Jan-Jun 2026 · virtual USDC",
+      },
+      backtestHint: { strategy: "mean_reversion_v1", note: "Approximates dip-buying around a slow-moving favourite." },
+    },
+    {
+      id: "longshot-fade",
+      name: "Longshot fade",
+      tagline: "Take the other side of longshot hype.",
+      description:
+        "Buys the high-priced side (the favourite) of markets drawing speculative longshot money, at a small " +
+        "discount, and exits into strength. This does not short — it simply buys the favourite's token cheaply.",
+      suggestedSearchQuery: "election winner",
+      outcomePick: "higher_price",
+      band: { entryOffset: "-0.02", exitOffset: "0.03", sharesPerOrder: "20", positionMultiplier: "4", intervalSeconds: 30 },
+      stats: {
+        kind: "illustrative",
+        returnPct: "8.90",
+        winRatePct: "71.50",
+        tradeCount: 96,
+        maxDrawdownPct: "4.20",
+        basis: "Illustrative backtest · 31 resolved markets · Jan-Jun 2026 · virtual USDC",
+      },
+      backtestHint: { strategy: "momentum_v1", note: "Backtests drift-following on the favourite's token." },
+    },
+    {
+      id: "ev-sniping",
+      name: "EV sniping",
+      tagline: "Catch momentary dips below fair value.",
+      description:
+        "Polls every five seconds for asks that dip below fair value in liquid markets, buys the dip, and sells " +
+        "the snap-back. Needs a deep book — in thin markets the spread will eat the edge.",
+      suggestedSearchQuery: "crypto above",
+      outcomePick: "lower_price",
+      band: { entryOffset: "-0.05", exitOffset: "0.10", sharesPerOrder: "10", positionMultiplier: "5", intervalSeconds: 5 },
+      stats: {
+        kind: "illustrative",
+        returnPct: "11.20",
+        winRatePct: "59.00",
+        tradeCount: 210,
+        maxDrawdownPct: "5.80",
+        basis: "Illustrative backtest · 55 resolved markets · Jan-Jun 2026 · virtual USDC",
+      },
+      backtestHint: { strategy: "mean_reversion_v1", note: "Backtests short-window reversion in liquid markets." },
+    },
+    {
+      id: "overreaction-fade",
+      name: "Overreaction fade",
+      tagline: "Buy the scare, sell the settle.",
+      description:
+        "Bids for outcomes that sold off sharply and holds for the reversion, in small clips so a genuine news " +
+        "move costs little. Works best on markets where headlines move prices more than fundamentals do.",
+      suggestedSearchQuery: "court ruling",
+      outcomePick: "lower_price",
+      band: { entryOffset: "-0.04", exitOffset: "0.06", sharesPerOrder: "5", positionMultiplier: "8", intervalSeconds: 15 },
+      stats: {
+        kind: "illustrative",
+        returnPct: "5.10",
+        winRatePct: "64.00",
+        tradeCount: 88,
+        maxDrawdownPct: "4.70",
+        basis: "Illustrative backtest · 38 resolved markets · Jan-Jun 2026 · virtual USDC",
+      },
+      backtestHint: { strategy: "mean_reversion_v1", note: "Backtests reversion after sharp downside moves." },
+    },
+    {
+      id: "resolution-grinder",
+      name: "Resolution grinder",
+      tagline: "Harvest near-certain favourites.",
+      description:
+        "Thin entries, quick scale-outs, and a tight cap on near-certain favourites in deep books. Small edge per " +
+        "trade, repeated — the slowest but steadiest of the templates.",
+      suggestedSearchQuery: "confirmation vote",
+      outcomePick: "higher_price",
+      band: { entryOffset: "-0.01", exitOffset: "0.02", sharesPerOrder: "25", positionMultiplier: "3", intervalSeconds: 60 },
+      stats: {
+        kind: "illustrative",
+        returnPct: "3.80",
+        winRatePct: "82.00",
+        tradeCount: 156,
+        maxDrawdownPct: "1.90",
+        basis: "Illustrative backtest · 47 resolved markets · Jan-Jun 2026 · virtual USDC",
+      },
+      backtestHint: { strategy: "breakout_v1", note: "Backtests grind-through behaviour on trending favourites." },
+    },
+  ],
+}).items;
+
+export function strategyTemplateById(id: string): (typeof strategyTemplates)[number] | undefined {
+  return strategyTemplates.find((template) => template.id === id);
+}
+
 export const alertChannelKindSchema = z.enum(["discord", "telegram"]);
 
 // Same literal values as paperStrategyActionSchema, minus "WAIT" — WAIT fires on
@@ -899,6 +1058,10 @@ export type PaperStrategyAction = z.infer<typeof paperStrategyActionSchema>;
 export type PaperStrategy = z.infer<typeof paperStrategySchema>;
 export type PaperStrategyEvent = z.infer<typeof paperStrategyEventSchema>;
 export type PaperStrategySnapshot = z.infer<typeof paperStrategySnapshotSchema>;
+export type StrategyTemplateBand = z.infer<typeof strategyTemplateBandSchema>;
+export type StrategyTemplateStats = z.infer<typeof strategyTemplateStatsSchema>;
+export type StrategyTemplate = z.infer<typeof strategyTemplateSchema>;
+export type StrategyTemplateList = z.infer<typeof strategyTemplateListSchema>;
 export type PaperShareStatus = z.infer<typeof paperShareStatusSchema>;
 export type PaperShareManageRequest = z.infer<typeof paperShareManageRequestSchema>;
 export type PublicTrackRecord = z.infer<typeof publicTrackRecordSchema>;
