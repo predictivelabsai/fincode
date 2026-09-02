@@ -4769,8 +4769,99 @@ th small {
   font-size: 0.75rem;
 }
 
+.template-chip-inline {
+  margin: 0 0 12px;
+}
+
+/* Public /templates landing page */
+.template-landing-hero {
+  max-width: 720px;
+  padding: 32px 0 8px;
+}
+
+.template-landing-hero h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  line-height: 1.1;
+}
+
+.template-landing-hero p {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.template-landing-cta {
+  margin-bottom: 8px;
+}
+
+.template-grid-landing {
+  margin-top: 24px;
+}
+
+.template-grid-landing .template-card-description {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.template-landing-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.template-landing-steps article {
+  padding: 20px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--pane);
+}
+
+.template-landing-steps svg {
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.template-landing-steps h2 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.template-landing-steps p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.template-landing-footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.template-landing-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.template-landing-footer a:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 700px) {
   .template-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .template-landing-steps {
     grid-template-columns: 1fr;
   }
 }
