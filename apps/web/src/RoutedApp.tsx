@@ -44,6 +44,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import {
   createOrderProposalSchema,
@@ -1186,6 +1187,18 @@ function TradesPage() {
 
 function PaperPage() {
   const workspace = useWorkspace();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTemplateId = searchParams.get("template");
+  // Consume ?template= once it has armed the workspace so a refresh does not
+  // re-arm it. Keeps PaperWorkspace itself router-free for its tests.
+  const consumeInitialTemplate = useCallback(() => {
+    setSearchParams((current) => {
+      if (!current.has("template")) return current;
+      const next = new URLSearchParams(current);
+      next.delete("template");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   // Stable identity: PaperWorkspace's poll effect depends on these callbacks.
   const onNotice = useCallback((message: string) => workspace.setMessage(message, "notice"), [workspace.setMessage]);
   return (
@@ -1193,6 +1206,8 @@ function PaperPage() {
       client={workspace.gateway}
       onError={workspace.setMessage}
       onNotice={onNotice}
+      initialTemplateId={initialTemplateId}
+      onInitialTemplateConsumed={consumeInitialTemplate}
     />
   );
 }

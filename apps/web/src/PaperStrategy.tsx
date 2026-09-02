@@ -2,6 +2,7 @@ import {
   Gauge,
   Play,
   Radio,
+  Sparkles,
   Square,
 } from "lucide-react";
 import {
@@ -11,10 +12,12 @@ import {
   type PaperStrategy,
   type PaperStrategySnapshot,
   type PaperStrategyStartRequest,
+  type StrategyTemplate,
 } from "@polytrade/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { GatewayClient } from "./api";
+import { templateDraft } from "./strategy-templates";
 
 const INTERVAL_OPTIONS = [5, 15, 30, 60, 300] as const;
 
@@ -32,6 +35,8 @@ export function PaperStrategyRunner(props: {
   tokenId: string;
   portfolio: PaperPortfolio | null;
   snapshot: PaperStrategySnapshot | null;
+  template?: StrategyTemplate | null;
+  onClearTemplate?: () => void;
   onSnapshot: (snapshot: PaperStrategySnapshot) => void;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
@@ -46,6 +51,9 @@ export function PaperStrategyRunner(props: {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const startKeyRef = useRef<string | null>(null);
+  const templateIdRef = useRef<string | null>(null);
+  const sourceRef = useRef<string | null>(null);
+  const editedRef = useRef(false);
 
   const selectedOutcome = useMemo(() => {
     if (!props.market) return null;
@@ -76,6 +84,34 @@ export function PaperStrategyRunner(props: {
 
   useEffect(() => {
     if (running || !props.market || !selectedOutcome) return;
+    // An armed template is a richer auto-fit: the band offsets are translated
+    // against the selected outcome's reference price. A manual edit always
+    // wins — the auto-fit re-applies only when the market, outcome, or
+    // template identity changes, so clearing a template by editing never
+    // clobbers the edit itself.
+    const templateId = props.template?.id ?? null;
+    const templateChanged = templateIdRef.current !== templateId;
+    templateIdRef.current = templateId;
+    if (templateChanged) {
+      // Arming a template always re-applies; clearing one never re-fits, so
+      // the values the user is looking at stay on screen.
+      if (templateId !== null) editedRef.current = false;
+      else return;
+    }
+    const source = `${props.market.conditionId}:${props.tokenId}`;
+    if (sourceRef.current !== source) {
+      sourceRef.current = source;
+      editedRef.current = false;
+    }
+    if (editedRef.current) return;
+    const fromTemplate = props.template
+      ? templateDraft(props.template, props.market, props.tokenId)
+      : null;
+    if (fromTemplate) {
+      setDraft(fromTemplate);
+      startKeyRef.current = null;
+      return;
+    }
     const index = props.market.clobTokenIds.indexOf(props.tokenId);
     const reference = finiteNumber(props.market.outcomePrices[index] ?? "0.5");
     const minimum = Math.max(finiteNumber(props.market.minimumOrderSize), 1);
@@ -88,10 +124,12 @@ export function PaperStrategyRunner(props: {
       maxPosition: formatInputShares(orderSize * 5),
     }));
     startKeyRef.current = null;
-  }, [props.market, props.tokenId, running, selectedOutcome]);
+  }, [props.market, props.tokenId, running, selectedOutcome, props.template]);
 
   const updateDraft = (key: keyof StrategyDraft, value: string) => {
     startKeyRef.current = null;
+    editedRef.current = true;
+    if (props.template) props.onClearTemplate?.();
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
@@ -132,6 +170,14 @@ export function PaperStrategyRunner(props: {
         <div><span className="eyebrow paper-eyebrow">Server automation</span><h2>Price-band strategy</h2></div>
         <span className={`paper-strategy-chip paper-strategy-chip-${strategy?.status.toLowerCase() ?? "ready"}`}><Radio aria-hidden="true" /> {strategy?.status ?? "READY"}</span>
       </header>
+
+      {props.template && !running ? (
+        <div className="template-chip" role="status">
+          <Sparkles aria-hidden="true" />
+          <span>Template · {props.template.name}</span>
+          <button className="button button-quiet template-chip-clear" type="button" onClick={props.onClearTemplate}>Use custom</button>
+        </div>
+      ) : null}
 
       {running && strategy ? (
         <div className="paper-strategy-target">

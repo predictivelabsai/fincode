@@ -4632,6 +4632,149 @@ th small {
   flex-wrap: wrap;
 }
 
+/* Strategy templates */
+
+.template-grid-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.template-grid-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.template-grid-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.template-grid-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--pane);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.template-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-card-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.template-card-kind {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.template-card-tagline {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.template-card-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.template-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--accent-wash, transparent);
+  border-radius: 8px;
+}
+
+.template-card-stats div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-card-stats dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.template-card-stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.template-card-basis {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.template-card-actions {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--accent-wash, transparent);
+  font-size: 0.8rem;
+}
+
+.template-chip-clear {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 700px) {
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

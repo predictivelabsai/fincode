@@ -19,11 +19,14 @@ import {
   type PaperQuote,
   type PaperQuoteRequest,
   type PaperStrategySnapshot,
+  type StrategyTemplate,
 } from "@polytrade/contracts";
 
 import { GatewayClient, GatewayError } from "./api";
 import { PaperStrategyRunner } from "./PaperStrategy";
 import { ShareCard } from "./TrackRecord";
+import { StrategyTemplateGrid } from "./TemplateGrid";
+import { resolveTemplateTokenId, strategyTemplateById, strategyTemplates } from "./strategy-templates";
 
 const FILL_PAGE_SIZE = 20;
 
@@ -31,6 +34,8 @@ export function PaperWorkspace(props: {
   client: GatewayClient;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
+  initialTemplateId?: string | null;
+  onInitialTemplateConsumed?: () => void;
 }) {
   const [portfolio, setPortfolio] = useState<PaperPortfolio | null>(null);
   const [fills, setFills] = useState<PaperFillsResponse | null>(null);
@@ -50,8 +55,10 @@ export function PaperWorkspace(props: {
   const [orderKey, setOrderKey] = useState<string | null>(null);
   const [strategySnapshot, setStrategySnapshot] = useState<PaperStrategySnapshot | null>(null);
   const [initialError, setInitialError] = useState<string | null>(null);
+  const [activeTemplate, setActiveTemplate] = useState<StrategyTemplate | null>(null);
   const pollBusyRef = useRef(false);
   const pollFailedRef = useRef(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadFills = useCallback(async (offset: number) => {
     try {
@@ -158,14 +165,13 @@ export function PaperWorkspace(props: {
     setOrderKey(null);
   };
 
-  const searchMarkets = async (event: FormEvent) => {
-    event.preventDefault();
-    const term = query.trim();
-    if (!term) return;
+  const runSearch = useCallback(async (term: string) => {
+    const trimmed = term.trim();
+    if (!trimmed) return;
     setSearching(true);
     clearPreview();
     try {
-      const response = await props.client.searchMarkets(term, "active", 20);
+      const response = await props.client.searchMarkets(trimmed, "active", 20);
       const markets = response.events.flatMap((eventItem) => eventItem.markets)
         .filter((market, index, all) => (
           market.active
@@ -180,14 +186,48 @@ export function PaperWorkspace(props: {
     } finally {
       setSearching(false);
     }
+  }, [props.client, props.onError]);
+
+  const searchMarkets = (event: FormEvent) => {
+    event.preventDefault();
+    void runSearch(query);
   };
 
   const selectMarket = (market: MarketSearchMarket) => {
     setSelectedMarket(market);
-    setSelectedTokenId(market.clobTokenIds[0] ?? "");
+    // An armed template picks the outcome its band is written for; otherwise
+    // the first outcome is selected, as before.
+    const templateTokenId = activeTemplate ? resolveTemplateTokenId(activeTemplate, market) : null;
+    setSelectedTokenId(templateTokenId ?? market.clobTokenIds[0] ?? "");
     setShareQuantity("");
     clearPreview();
   };
+
+  const deployTemplate = (template: StrategyTemplate) => {
+    setActiveTemplate(template);
+    setQuery(template.suggestedSearchQuery);
+    void runSearch(template.suggestedSearchQuery);
+    searchInputRef.current?.focus();
+  };
+
+  const clearTemplate = () => setActiveTemplate(null);
+
+  // A template id handed in through the URL (public /templates landing) arms
+  // the runner once on mount, pre-searches the picker, and hands the query
+  // param back to the route wrapper so a refresh does not re-arm it.
+  const initialTemplateRef = useRef(false);
+  useEffect(() => {
+    if (initialTemplateRef.current) return;
+    initialTemplateRef.current = true;
+    if (!props.initialTemplateId) return;
+    const template = strategyTemplateById(props.initialTemplateId) ?? null;
+    if (template) {
+      setActiveTemplate(template);
+      setQuery(template.suggestedSearchQuery);
+      void runSearch(template.suggestedSearchQuery);
+    }
+    props.onInitialTemplateConsumed?.();
+  }, [props.initialTemplateId, props.onInitialTemplateConsumed, runSearch]);
 
   const previewOrder = async () => {
     if (!request) return;
@@ -271,6 +311,12 @@ export function PaperWorkspace(props: {
         </section>
       ) : null}
 
+      <StrategyTemplateGrid
+        templates={strategyTemplates}
+        onDeploy={deployTemplate}
+        runningBlocked={strategySnapshot?.strategy?.status === "RUNNING"}
+      />
+
       <div className="paper-grid">
         <div className="paper-data-column">
           <section className="paper-market-panel">
@@ -278,7 +324,7 @@ export function PaperWorkspace(props: {
             <form className="paper-market-search" onSubmit={(event) => void searchMarkets(event)}>
               <Search aria-hidden="true" />
               <label className="sr-only" htmlFor="paper-market-query">Search active Polymarket markets</label>
-              <input id="paper-market-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search elections, rates, crypto…" />
+              <input id="paper-market-query" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search elections, rates, crypto…" />
               <button type="submit" disabled={searching || !query.trim()}>{searching ? "Searching…" : "Search"}</button>
             </form>
             <div className="paper-market-results">
@@ -340,6 +386,8 @@ export function PaperWorkspace(props: {
             tokenId={selectedTokenId}
             portfolio={portfolio}
             snapshot={strategySnapshot}
+            template={activeTemplate}
+            onClearTemplate={clearTemplate}
             onSnapshot={setStrategySnapshot}
             onError={props.onError}
             onNotice={props.onNotice}
