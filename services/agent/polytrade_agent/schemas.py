@@ -196,3 +196,31 @@ PublicThreadItem = Annotated[
 class ThreadMessagesResponse(ContractModel):
     thread_id: UUID
     items: list[PublicThreadItem]
+
+
+ConfidenceString = Annotated[
+    str,
+    StringConstraints(pattern=r"^(0(\.\d{1,4})?|1(\.0{1,4})?)$"),
+]
+
+
+class PredictionInput(ContractModel):
+
+    condition_id: str = Field(min_length=1, max_length=200)
+    token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")] | None = None
+    market_question: str = Field(min_length=1, max_length=1_000)
+    predicted_outcome: str = Field(min_length=1, max_length=200)
+    confidence: ConfidenceString | None = None
+
+
+class PredictionRecorded(ContractModel):
+
+    prediction_id: UUID
+    condition_id: str = Field(min_length=1, max_length=200)
+    token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")] | None = None
+    market_question: str = Field(min_length=1, max_length=1_000)
+    predicted_outcome: str = Field(min_length=1, max_length=200)
+    confidence: ConfidenceString | None = None
+    status: Literal["PENDING", "GRADED", "VOID"]
+    made_at: datetime
+    category: str | None = None
