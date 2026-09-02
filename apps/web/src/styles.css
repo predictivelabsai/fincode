@@ -4632,6 +4632,74 @@ th small {
   flex-wrap: wrap;
 }
 
+/* Public agent accuracy scorecard at /accuracy */
+.accuracy-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 20px 48px;
+}
+
+.accuracy-page .page-title {
+  margin: 0;
+}
+
+.accuracy-summary .summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.accuracy-summary .summary-metrics span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: var(--raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.accuracy-summary .summary-metrics strong {
+  font-size: 1rem;
+  font-family: var(--mono);
+}
+
+.accuracy-summary .summary-metrics small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.accuracy-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.accuracy-hit {
+  background: var(--accent-wash);
+  color: var(--accent-strong);
+}
+
+.accuracy-miss {
+  background: rgba(251, 113, 133, 0.12);
+  color: var(--danger);
+}
+
+.accuracy-disclaimer {
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 700px) {
+  .accuracy-summary .summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
