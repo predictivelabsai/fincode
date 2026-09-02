@@ -88,7 +88,9 @@ def test_prediction_input_rejects_out_of_bounds_values() -> None:
             condition_id="0xcondition",
             market_question="Will the Fed hold rates in September?",
             predicted_outcome="Yes",
-            token_id="abc",
+            # Not a secret — a malformed Polymarket token id; ruff's S106
+            # pattern fires on the `token_id` keyword alone.
+            token_id="abc",  # noqa: S106
         )
     # Confidence is optional and omitted fields stay omitted on the wire.
     payload = PredictionInput(

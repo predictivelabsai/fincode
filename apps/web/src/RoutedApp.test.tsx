@@ -841,7 +841,9 @@ describe("routed workspace", () => {
     const user = userEvent.setup();
     renderRoute(`/chat/${THREAD_A}`);
     const history = await screen.findByRole("complementary", { name: "Chat history" });
-    await user.click(within(history).getByRole("button", { name: "Delete Election liquidity" }));
+    // The thread list arrives in a separate fetch from the pane itself, so the
+    // delete button needs an async query or this flakes on slow runners.
+    await user.click(await within(history).findByRole("button", { name: "Delete Election liquidity" }));
     await waitFor(() => expect(mocks.deleteAgentThread).toHaveBeenCalledWith("https://api.polytrade.test", expect.any(Function), THREAD_A));
     expect(window.confirm).toHaveBeenCalled();
   });
