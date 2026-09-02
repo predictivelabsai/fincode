@@ -9,7 +9,13 @@ from pydantic import Field
 
 from .config import get_settings
 from .context import AgentRunContext
-from .schemas import BacktestRunReference, TradingActionInput, UnsignedProposalEnvelope
+from .schemas import (
+    BacktestRunReference,
+    PredictionInput,
+    PredictionRecorded,
+    TradingActionInput,
+    UnsignedProposalEnvelope,
+)
 
 MAX_TOOL_RESULT_CHARS = 32_000
 TRUNCATED_PREFIX_CHARS = 12_000
@@ -104,6 +110,31 @@ def _encoded_tool_result(payload: Any) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
     )
+
+
+async def _gateway_post(
+    path: str,
+    *,
+    runtime: ToolRuntime[AgentRunContext],
+    payload: dict[str, Any],
+    idempotency_key: str | None = None,
+) -> Any:
+    settings = get_settings()
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {_gateway_token(runtime)}",
+    }
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    async with httpx.AsyncClient(
+        base_url=str(settings.GATEWAY_BASE_URL).rstrip("/"),
+        timeout=settings.AGENT_HTTP_TIMEOUT_SECONDS,
+        follow_redirects=False,
+    ) as client:
+        response = await client.post(path, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
 
 @tool
@@ -312,6 +343,43 @@ async def list_my_backtests(
 
 
 @tool
+async def record_prediction(
+    condition_id: Annotated[str, Field(min_length=1, max_length=200)],
+    market_question: Annotated[str, Field(min_length=1, max_length=1_000)],
+    predicted_outcome: Annotated[str, Field(min_length=1, max_length=200)],
+    runtime: ToolRuntime[AgentRunContext],
+    token_id: Annotated[str | None, Field(pattern=r"^\d+$")] = None,
+    confidence: Annotated[str | None, Field(pattern=r"^(0(\.\d{1,4})?|1(\.0{1,4})?)$")] = None,
+) -> str:
+    """Record a falsifiable directional call for the public accuracy scorecard.
+
+    Call this exactly once, in the same turn, whenever you state which outcome
+    will win one specific live Polymarket market. Use the exact condition ID and
+    market question copied from Polymarket tool output, and the outcome you say
+    will win. Never call it for an already-resolved market, a hypothetical or
+    conditional statement, a backtest run, or a restatement of someone else's
+    claim. This is measurement bookkeeping, not forecasting: it stores only the
+    market question, the predicted outcome, and the eventual resolution, and it
+    grants no license to promise returns.
+    """
+    payload = PredictionInput(
+        condition_id=condition_id,
+        token_id=token_id,
+        market_question=market_question,
+        predicted_outcome=predicted_outcome,
+        confidence=confidence,
+    ).model_dump(by_alias=True, exclude_none=True)
+    tool_call_id = getattr(runtime, "tool_call_id", None)
+    record = await _gateway_post(
+        "/v1/agent/predictions",
+        runtime=runtime,
+        payload=payload,
+        idempotency_key=f"prediction:{tool_call_id or uuid4()}",
+    )
+    return PredictionRecorded.model_validate(record).model_dump_json(by_alias=True)
+
+
+@tool
 async def get_my_backtest(
     run_id: Annotated[str, Field(min_length=36, max_length=36)],
     runtime: ToolRuntime[AgentRunContext],
@@ -348,5 +416,6 @@ POLYMARKET_TOOLS = [
     start_polymarket_backtest,
     list_my_backtests,
     get_my_backtest,
+    record_prediction,
     propose_trading_action,
 ]

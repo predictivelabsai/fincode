@@ -160,6 +160,7 @@ def test_agent_exposes_only_polymarket_reads_backtests_and_unsigned_drafting() -
         "start_polymarket_backtest",
         "list_my_backtests",
         "get_my_backtest",
+        "record_prediction",
         "propose_trading_action",
     }
     assert not names.intersection(
@@ -212,6 +213,16 @@ def test_agent_prompt_states_the_exact_active_run_limit() -> None:
     assert "At most 10 backtests may be queued or running" in normalized_prompt
     assert "If the request itself exceeds 10, start no runs" in normalized_prompt
     assert "activeCount and activeLimit" in normalized_prompt
+
+
+def test_agent_prompt_scopes_record_prediction_as_bookkeeping() -> None:
+    normalized_prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "call record_prediction once in that turn" in normalized_prompt
+    assert "Never call record_prediction for an already-resolved market" in normalized_prompt
+    assert "measurement bookkeeping, not forecasting" in normalized_prompt
+    # The anti-advice posture must survive the scorecard paragraph.
+    assert "not expected returns" in normalized_prompt
+    assert "remains a hypothetical" in normalized_prompt
 
 
 def test_backtest_capacity_guard_blocks_an_over_limit_batch_before_execution() -> None:
