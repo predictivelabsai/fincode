@@ -1298,8 +1298,8 @@ function PaperPage() {
 function PositionsTable({ account }: { account: AccountOverview | null }) {
   return (
     <DataSection title="Positions" count={account?.positions.length ?? 0}>
-      <table><thead><tr><th>Market / outcome</th><th>Size</th><th>Average</th><th>Current</th><th>Value</th><th>P&amp;L</th><th>Status</th></tr></thead><tbody>
-        {account?.positions.map((position) => <tr key={position.positionId}><th>{position.marketTitle || compactIdentifier(position.conditionId || position.positionId)}<small>{position.outcome || "—"}</small></th><td>{valueOrDash(position.size)}</td><td>{price(position.averagePrice)}</td><td>{price(position.currentPrice)}</td><td>{money(position.currentValue)}</td><td className={Number(position.cashPnl) >= 0 ? "value-positive" : "value-negative"}>{money(position.cashPnl)}<small>{percent(position.percentPnl)}</small></td><td><StatusPill value={position.redeemable ? "Redeemable" : "Open"} /></td></tr>)}
+      <table><thead><tr><th>Market / outcome</th><th className="num">Size</th><th className="num">Average</th><th className="num">Current</th><th className="num">Value</th><th className="num">P&amp;L</th><th>Status</th></tr></thead><tbody>
+        {account?.positions.map((position) => <tr key={position.positionId}><th>{position.marketTitle || compactIdentifier(position.conditionId || position.positionId)}<small>{position.outcome || "—"}</small></th><td className="num">{valueOrDash(position.size)}</td><td className="num">{price(position.averagePrice)}</td><td className="num">{price(position.currentPrice)}</td><td className="num">{money(position.currentValue)}</td><td className={`num ${Number(position.cashPnl) >= 0 ? "value-positive" : "value-negative"}`}>{money(position.cashPnl)}<small>{percent(position.percentPnl)}</small></td><td><StatusPill value={position.redeemable ? "Redeemable" : "Open"} /></td></tr>)}
       </tbody></table>
       {!account?.positions.length && <TableEmpty label="No positions." />}
     </DataSection>
@@ -1309,8 +1309,8 @@ function PositionsTable({ account }: { account: AccountOverview | null }) {
 function OrdersTable(props: { account: AccountOverview | null; disabled: boolean; onCancel: (selector: CancellationSelector) => void }) {
   return (
     <DataSection title="Open orders" count={props.account?.openOrders.length ?? 0}>
-      <table><thead><tr><th>Market / outcome</th><th>Side</th><th>Remaining</th><th>Price</th><th>Type</th><th>Created</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>
-        {props.account?.openOrders.map((order) => <tr key={order.orderId}><th>{compactIdentifier(order.marketId || order.orderId)}<small>{order.outcome || "—"}</small></th><td><StatusPill value={order.side || "—"} /></td><td>{valueOrDash(order.remainingSize)}<small>{valueOrDash(order.matchedSize)} matched</small></td><td>{price(order.price)}</td><td>{order.orderType || "—"}</td><td>{order.createdAt ? formatDate(order.createdAt) : "—"}</td><td><button className="table-action" type="button" disabled={props.disabled} onClick={() => props.onCancel({ kind: "order", orderId: order.orderId })}>Cancel</button></td></tr>)}
+      <table><thead><tr><th>Market / outcome</th><th>Side</th><th className="num">Remaining</th><th className="num">Price</th><th>Type</th><th>Created</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>
+        {props.account?.openOrders.map((order) => <tr key={order.orderId}><th>{compactIdentifier(order.marketId || order.orderId)}<small>{order.outcome || "—"}</small></th><td><StatusPill value={order.side || "—"} /></td><td className="num">{valueOrDash(order.remainingSize)}<small>{valueOrDash(order.matchedSize)} matched</small></td><td className="num">{price(order.price)}</td><td>{order.orderType || "—"}</td><td>{order.createdAt ? formatDate(order.createdAt) : "—"}</td><td><button className="table-action" type="button" disabled={props.disabled} onClick={() => props.onCancel({ kind: "order", orderId: order.orderId })}>Cancel</button></td></tr>)}
       </tbody></table>
       {!props.account?.openOrders.length && <TableEmpty label="No open orders." />}
     </DataSection>
@@ -1320,8 +1320,8 @@ function OrdersTable(props: { account: AccountOverview | null; disabled: boolean
 function FillsTable({ account }: { account: AccountOverview | null }) {
   return (
     <DataSection title="Fill history" count={account?.fills.length ?? 0}>
-      <table><thead><tr><th>Trade</th><th>Market / outcome</th><th>Side</th><th>Size</th><th>Price</th><th>Matched</th><th>Role</th><th>Transaction</th></tr></thead><tbody>
-        {account?.fills.map((fill) => <tr key={fill.tradeId}><th>{compactIdentifier(fill.tradeId)}</th><td>{compactIdentifier(fill.marketId || "—")}<small>{fill.outcome || "—"}</small></td><td><StatusPill value={fill.side || "—"} /></td><td>{valueOrDash(fill.size)}</td><td>{price(fill.price)}</td><td>{fill.matchedAt ? formatDate(fill.matchedAt) : "—"}</td><td>{fill.traderSide || "—"}</td><td><code>{fill.transactionHash ? compactIdentifier(fill.transactionHash) : "—"}</code></td></tr>)}
+      <table><thead><tr><th>Trade</th><th>Market / outcome</th><th>Side</th><th className="num">Size</th><th className="num">Price</th><th>Matched</th><th>Role</th><th>Transaction</th></tr></thead><tbody>
+        {account?.fills.map((fill) => <tr key={fill.tradeId}><th>{compactIdentifier(fill.tradeId)}</th><td>{compactIdentifier(fill.marketId || "—")}<small>{fill.outcome || "—"}</small></td><td><StatusPill value={fill.side || "—"} /></td><td className="num">{valueOrDash(fill.size)}</td><td className="num">{price(fill.price)}</td><td>{fill.matchedAt ? formatDate(fill.matchedAt) : "—"}</td><td>{fill.traderSide || "—"}</td><td><code>{fill.transactionHash ? compactIdentifier(fill.transactionHash) : "—"}</code></td></tr>)}
       </tbody></table>
       {!account?.fills.length && <TableEmpty label="No fills recorded." />}
     </DataSection>
@@ -1339,20 +1339,16 @@ function SettingsPage() {
     <main className="detail-page settings-page">
       <PageTitle eyebrow="Security and access" title="Settings" />
       <div className="settings-grid">
-        <section className="settings-card">
-          <div className="settings-card-heading"><ShieldCheck /><div><span className="eyebrow">Connection status</span><h2>Eligibility</h2></div></div>
-          <StatusLine label="Browser IP check" value={eligibilityLabel(workspace.eligibility)} tone={workspace.tradeAllowed ? "good" : "warn"} />
-          <StatusLine label="Country / region" value={workspace.eligibility ? `${workspace.eligibility.country || "—"} / ${workspace.eligibility.region || "—"}` : "Checking"} />
-          <StatusLine label="Identity" value="Signed in with Clerk" tone="good" />
-          <button className="button button-quiet" type="button" onClick={() => void workspace.refreshEligibility()}><RefreshCw /> Recheck eligibility</button>
-        </section>
+        <div className="settings-col">
+          <section className="settings-card">
+            <div className="settings-card-heading"><ShieldCheck /><div><span className="eyebrow">Connection status</span><h2>Eligibility</h2></div></div>
+            <StatusLine label="Browser IP check" value={eligibilityLabel(workspace.eligibility)} tone={workspace.tradeAllowed ? "good" : "warn"} />
+            <StatusLine label="Country / region" value={workspace.eligibility ? `${workspace.eligibility.country || "—"} / ${workspace.eligibility.region || "—"}` : "Checking"} />
+            <StatusLine label="Identity" value="Signed in with Clerk" tone="good" />
+            <button className="button button-quiet" type="button" onClick={() => void workspace.refreshEligibility()}><RefreshCw /> Recheck eligibility</button>
+          </section>
 
-        <section className="settings-card settings-card-wide alerts-settings-card">
-          <div className="settings-card-heading"><Bell /><div><span className="eyebrow">Notifications</span><h2>Strategy alerts</h2></div></div>
-          <AlertsSettings client={workspace.gateway} onError={workspace.setMessage} onNotice={(notice) => workspace.setMessage(notice, "notice")} />
-        </section>
-
-        <section className="settings-card settings-card-wide">
+          <section className="settings-card">
           <div className="settings-card-heading"><WalletCards /><div><span className="eyebrow">Wallet authority</span><h2>{workspace.session ? "Verified session" : "Connect a wallet"}</h2></div></div>
           {workspace.session ? (
             <>
@@ -1406,6 +1402,12 @@ function SettingsPage() {
               {restricted && <p className="restriction-note">{eligibilityRestrictionMessage(workspace.eligibility)}</p>}
             </>
           )}
+          </section>
+        </div>
+
+        <section className="settings-card alerts-settings-card">
+          <div className="settings-card-heading"><Bell /><div><span className="eyebrow">Notifications</span><h2>Strategy alerts</h2></div></div>
+          <AlertsSettings client={workspace.gateway} onError={workspace.setMessage} onNotice={(notice) => workspace.setMessage(notice, "notice")} />
         </section>
       </div>
     </main>
@@ -1700,7 +1702,7 @@ function PageTitle(props: { children?: ReactNode; description?: string; eyebrow:
 }
 
 function DataSection(props: { children: ReactNode; count: number; title: string }) {
-  return <section className="data-section"><header><div><span className="eyebrow">Account ledger</span><h2>{props.title}</h2></div><span className="count-pill">{props.count}</span></header><div className="table-scroll">{props.children}</div></section>;
+  return <section className="data-section"><header><h2>{props.title}</h2><span className="count-pill">{props.count}</span></header><div className="table-scroll">{props.children}</div></section>;
 }
 
 function TableEmpty({ label }: { label: string }) {
