@@ -1136,6 +1136,25 @@ textarea::placeholder {
   font: 500 0.58rem var(--mono);
 }
 
+.status-card > .wallet-session-expiry {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font: 400 0.6rem/1.3 var(--mono);
+}
+
+.status-card > .reconnect-button {
+  justify-self: start;
+  padding: 6px 10px;
+  font-size: 0.67rem;
+}
+
+.empty-page-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .ticket {
   position: relative;
   padding: 13px;

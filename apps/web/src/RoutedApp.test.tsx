@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => {
     backtestList: vi.fn(),
     browserEligibility: vi.fn(),
     createAgentThread: vi.fn(),
+    createChallenge: vi.fn(),
+    createWalletSession: vi.fn(),
     currentWalletSession: vi.fn(),
     deleteAgentThread: vi.fn(),
     getAgentThreadItems: vi.fn(),
@@ -50,6 +52,7 @@ const mocks = vi.hoisted(() => {
     refreshPaperPortfolio: vi.fn(),
     runAgentTurn: vi.fn(),
     searchMarkets: vi.fn(),
+    signTypedPayload: vi.fn(),
     startPaperStrategy: vi.fn(),
     stopPaperStrategy: vi.fn(),
   };
@@ -104,8 +107,8 @@ vi.mock("./api", () => ({
     deleteAlertChannel = mocks.deleteAlertChannel;
     testAlertChannel = mocks.testAlertChannel;
     listAlertDeliveries = mocks.listAlertDeliveries;
-    createChallenge = vi.fn();
-    createWalletSession = vi.fn();
+    createChallenge = mocks.createChallenge;
+    createWalletSession = mocks.createWalletSession;
     revokeWalletSession = vi.fn();
     cancel = vi.fn();
     createIntent = vi.fn();
@@ -131,7 +134,7 @@ vi.mock("./eligibility", () => ({
 
 vi.mock("./wallet", () => ({
   connectWallet: mocks.attachWallet,
-  signTypedPayload: vi.fn(),
+  signTypedPayload: mocks.signTypedPayload,
 }));
 
 const summaryA = {
@@ -543,6 +546,88 @@ describe("routed workspace", () => {
     expect(await screen.findByText("Not locally attached")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Attach matching wallet/i }));
     expect(await screen.findByText("Matching wallet attached")).toBeInTheDocument();
+  });
+
+  describe("wallet session lifecycle", () => {
+    const liveSession = {
+      ...session,
+      idleExpiresAt: new Date(Date.now() + 4 * 3_600_000).toISOString(),
+      expiresAt: new Date(Date.now() + 23 * 3_600_000).toISOString(),
+    };
+
+    afterEach(() => {
+      window.localStorage.removeItem("polytrade.wallet-session-prefs");
+    });
+
+    it("reconnects an expired session from Trades with one signature", async () => {
+      const user = userEvent.setup();
+      mocks.attachWallet.mockResolvedValue({ address: WALLET, provider: {} });
+      mocks.createChallenge.mockResolvedValue({
+        challengeId: "challenge-1",
+        typedData: { domain: { name: "PolyTrade" }, primaryType: "WalletAuth", types: {}, message: {} },
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      });
+      mocks.signTypedPayload.mockResolvedValue(`0x${"ab".repeat(65)}`);
+      mocks.createWalletSession.mockResolvedValue(liveSession);
+      mocks.accountOverview.mockResolvedValue(overview);
+
+      renderRoute("/trades");
+      await user.click(await screen.findByRole("button", { name: /Reconnect wallet/i }));
+
+      expect(await screen.findByText("Wallet verified and locally attached for signing.")).toBeInTheDocument();
+      expect(mocks.createChallenge).toHaveBeenCalledWith(expect.objectContaining({ walletAddress: WALLET, signatureType: 0 }));
+      expect(mocks.createWalletSession).toHaveBeenCalledWith("challenge-1", `0x${"ab".repeat(65)}`);
+      // The trades page leaves the empty state and shows the live account strip.
+      expect(screen.getAllByText("Fill history").length).toBeGreaterThan(0);
+      expect(JSON.parse(window.localStorage.getItem("polytrade.wallet-session-prefs") ?? "{}")).toEqual({ signatureType: 0, funderAddress: "" });
+    });
+
+    it("prefills the reconnect form with the remembered wallet type and funder", async () => {
+      window.localStorage.setItem("polytrade.wallet-session-prefs", JSON.stringify({ signatureType: 2, funderAddress: "0xfunder" }));
+
+      renderRoute("/settings");
+
+      expect(await screen.findByLabelText("Wallet type")).toHaveValue("2");
+      expect(screen.getByLabelText("Funder / maker address")).toHaveValue("0xfunder");
+    });
+
+    it("announces an expired wallet session instead of dropping it silently", async () => {
+      mocks.currentWalletSession.mockResolvedValue(liveSession);
+      mocks.accountOverview.mockRejectedValue(new mocks.GatewayError("No active wallet session", "NOT_FOUND", 404));
+
+      renderRoute("/trades");
+
+      expect(await screen.findByText(/Wallet session expired or was revoked/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Reconnect wallet/i })).toBeEnabled();
+    });
+
+    it("renews the session while the tab is visible and announces expiry once", async () => {
+      vi.useFakeTimers();
+      try {
+        mocks.currentWalletSession.mockResolvedValue(liveSession);
+        mocks.accountOverview.mockResolvedValue(overview);
+        renderRoute("/chat");
+        // Flush the initial restore; avoid waitFor-based queries here because
+        // fake timers would freeze its polling interval.
+        await act(async () => {});
+        expect(screen.getByText(/Session expires/i)).toBeInTheDocument();
+
+        const before = mocks.currentWalletSession.mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+        expect(mocks.currentWalletSession.mock.calls.length).toBe(before + 1);
+
+        const expired = new mocks.GatewayError("No active wallet session", "NOT_FOUND", 404);
+        mocks.currentWalletSession.mockRejectedValue(expired);
+        mocks.accountOverview.mockRejectedValue(expired);
+        await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+        expect(screen.getByText(/Wallet session expired or was revoked/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Wallet session expired or was revoked/i)).toHaveLength(1);
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        expect(screen.getAllByText(/Wallet session expired or was revoked/i)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("authorizes wallet verification from the browser IP check alone", async () => {

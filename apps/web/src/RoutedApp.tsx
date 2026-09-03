@@ -175,6 +175,40 @@ const emptyChat = (): ChatState => ({
   backtests: [],
 });
 
+/**
+ * Wallet type and funder are the only reconnect inputs, so remembering them
+ * locally turns an expired session into a single signature prompt instead of
+ * the full connect walkthrough. The wallet address itself is never stored.
+ */
+const WALLET_PREFS_KEY = "polytrade.wallet-session-prefs";
+
+interface WalletPrefs {
+  signatureType: 0 | 1 | 2 | 3;
+  funderAddress: string;
+}
+
+function loadWalletPrefs(): WalletPrefs {
+  try {
+    const raw = window.localStorage.getItem(WALLET_PREFS_KEY);
+    if (!raw) return { signatureType: 0, funderAddress: "" };
+    const parsed = JSON.parse(raw) as Partial<WalletPrefs>;
+    return {
+      signatureType: parsed.signatureType === 1 || parsed.signatureType === 2 || parsed.signatureType === 3 ? parsed.signatureType : 0,
+      funderAddress: typeof parsed.funderAddress === "string" ? parsed.funderAddress : "",
+    };
+  } catch {
+    return { signatureType: 0, funderAddress: "" };
+  }
+}
+
+function saveWalletPrefs(prefs: WalletPrefs): void {
+  try {
+    window.localStorage.setItem(WALLET_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Storage can be unavailable (private mode); reconnect just loses its prefill.
+  }
+}
+
 export default function RoutedApp() {
   return (
     <WorkspaceProvider>
@@ -205,8 +239,9 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [pendingOrders, setPendingOrders] = useState<Record<string, PendingOrder | undefined>>({});
   const [session, setSession] = useState<WalletSessionStatus | null>(null);
   const [localWallet, setLocalWallet] = useState<ConnectedWallet | null>(null);
-  const [signatureType, setSignatureType] = useState<0 | 1 | 2 | 3>(0);
-  const [funderAddress, setFunderAddress] = useState("");
+  const [walletPrefs] = useState(loadWalletPrefs);
+  const [signatureType, setSignatureType] = useState<0 | 1 | 2 | 3>(walletPrefs.signatureType);
+  const [funderAddress, setFunderAddress] = useState(walletPrefs.funderAddress);
   const [eligibility, setEligibility] = useState<Eligibility | null>(null);
   const [account, setAccount] = useState<AccountOverview | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
@@ -252,6 +287,20 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     setEligibility(await checkBrowserEligibility());
   }, []);
 
+  // The gateway expires an idle wallet session server-side; detect that once
+  // and say so, instead of silently dropping the session on a 404.
+  const sessionExpiredRef = useRef(false);
+
+  const handleMissingSession = useCallback(() => {
+    setSession(null);
+    setLocalWallet(null);
+    setAccount(null);
+    if (!sessionExpiredRef.current) {
+      sessionExpiredRef.current = true;
+      setMessage("Wallet session expired or was revoked. Reconnecting takes one signature — your wallet type is remembered.", "notice");
+    }
+  }, [setMessage]);
+
   const refreshAccount = useCallback(async () => {
     if (!session) return;
     setBusy((current) => current ?? "account");
@@ -259,16 +308,30 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       setAccount(await gateway.accountOverview());
     } catch (caught) {
       if (caught instanceof GatewayError && caught.status === 404) {
-        setSession(null);
-        setAccount(null);
-        setLocalWallet(null);
+        handleMissingSession();
       } else {
         setMessage(errorMessage(caught));
       }
     } finally {
       setBusy((current) => current === "account" ? null : current);
     }
-  }, [gateway, session, setMessage]);
+  }, [gateway, session, setMessage, handleMissingSession]);
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const fresh = await gateway.currentWalletSession();
+      sessionExpiredRef.current = false;
+      setSession((current) => (
+        current && current.idleExpiresAt === fresh.idleExpiresAt && current.expiresAt === fresh.expiresAt ? current : fresh
+      ));
+    } catch (caught) {
+      if (caught instanceof GatewayError && caught.status === 404) {
+        handleMissingSession();
+      } else {
+        setMessage(errorMessage(caught));
+      }
+    }
+  }, [gateway, handleMissingSession, setMessage]);
 
   useEffect(() => {
     void refreshThreads();
@@ -277,12 +340,16 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     void gateway.currentWalletSession()
       .then(async (restored) => {
         if (cancelled) return;
+        sessionExpiredRef.current = false;
         setSession(restored);
         try {
           const nextAccount = await gateway.accountOverview();
           if (!cancelled) setAccount(nextAccount);
         } catch (caught) {
-          if (!cancelled && !(caught instanceof GatewayError && caught.status === 404)) {
+          if (cancelled) return;
+          if (caught instanceof GatewayError && caught.status === 404) {
+            handleMissingSession();
+          } else {
             setMessage(errorMessage(caught));
           }
         }
@@ -295,12 +362,18 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [gateway, refreshEligibility, refreshThreads, setMessage]);
+  }, [gateway, refreshEligibility, refreshThreads, setMessage, handleMissingSession]);
 
   useEffect(() => {
     if (!session) return;
     const poll = () => {
-      if (document.visibilityState === "visible") void refreshAccount();
+      if (document.visibilityState !== "visible") return;
+      void (async () => {
+        // The account call slides the idle window; the session read then syncs
+        // the fresh expiry so countdowns and the Settings page stay truthful.
+        await refreshAccount();
+        await refreshSession();
+      })();
     };
     const interval = window.setInterval(poll, 30_000);
     document.addEventListener("visibilitychange", poll);
@@ -308,7 +381,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [refreshAccount, session]);
+  }, [refreshAccount, refreshSession, session]);
 
   const loadThread = useCallback(async (threadId: string) => {
     if (loadedThreadsRef.current.has(threadId) || loadingThreadsRef.current.has(threadId)) return;
@@ -532,6 +605,8 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       });
       const signature = await signTypedPayload(connected, challenge.typedData);
       const created = await gateway.createWalletSession(challenge.challengeId, signature);
+      sessionExpiredRef.current = false;
+      saveWalletPrefs({ signatureType, funderAddress: signatureType === 0 ? "" : funderAddress.trim() });
       setLocalWallet(connected);
       setSession(created);
       setAccount(await gateway.accountOverview());
@@ -1107,7 +1182,13 @@ const ActivityPane = function ActivityPane(props: {
           <section className="activity-card status-card">
             <div><ShieldCheck /><span>Eligibility</span><strong>{eligibilityLabel(workspace.eligibility)}</strong></div>
             <div><WalletCards /><span>Wallet</span><strong>{workspace.session ? "Session active" : "Disconnected"}</strong></div>
+            {workspace.session && <p className="wallet-session-expiry">Session expires {relativeTime(workspace.session.expiresAt)}</p>}
             {workspace.session && !signerReady && <Link to="/settings">Attach browser wallet to sign <ChevronRight /></Link>}
+            {!workspace.session && (
+              <button className="button button-quiet reconnect-button" type="button" disabled={!workspace.tradeAllowed || workspace.busy === "wallet"} onClick={() => void workspace.connectAndVerify()}>
+                <WalletCards /> {workspace.busy === "wallet" ? "Reconnecting…" : "Reconnect wallet"}
+              </button>
+            )}
           </section>
         </div>
       </div>
@@ -1147,7 +1228,7 @@ function TradesPage() {
         <button className="button button-quiet" type="button" onClick={() => void workspace.refreshAccount()} disabled={!workspace.session || Boolean(workspace.busy)}><RefreshCw /> Refresh account</button>
       </PageTitle>
       {!workspace.session ? (
-        <section className="empty-page-card"><WalletCards /><h2>No wallet session</h2><p>Wallet connection and verification live in Settings.</p><Link className="button button-primary" to="/settings">Open Settings <ArrowRight /></Link></section>
+        <section className="empty-page-card"><WalletCards /><h2>No wallet session</h2><p>Wallet connection and verification live in Settings. Reconnecting takes one free signature — your wallet type is remembered from the last session.</p><div className="empty-page-actions"><button className="button button-primary" type="button" disabled={!workspace.tradeAllowed || Boolean(workspace.busy)} onClick={() => void workspace.connectAndVerify()}><WalletCards /> {workspace.busy === "wallet" ? "Waiting for wallet…" : "Reconnect wallet"}</button><Link className="button button-quiet" to="/settings">Open Settings <ArrowRight /></Link></div>{!workspace.tradeAllowed && <p className="restriction-note">{eligibilityRestrictionMessage(workspace.eligibility)}</p>}</section>
       ) : (
         <>
           <section className="summary-strip" aria-label="Account summary">

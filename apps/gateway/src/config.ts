@@ -50,8 +50,11 @@ const envSchema = z.object({
   POLYMARKET_CHAIN_ID: z.coerce.number().int().default(137),
   POLYMARKET_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   WALLET_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(600).default(300),
-  WALLET_SESSION_IDLE_SECONDS: z.coerce.number().int().min(300).max(3_600).default(1_800),
-  WALLET_SESSION_MAX_SECONDS: z.coerce.number().int().min(1_800).max(86_400).default(28_800),
+  // The idle window slides forward on every wallet-scoped call the web client
+  // makes while its tab is visible (account refresh), so it only binds when the
+  // user is away. The absolute cap still bounds credential custody to one day.
+  WALLET_SESSION_IDLE_SECONDS: z.coerce.number().int().min(300).max(28_800).default(14_400),
+  WALLET_SESSION_MAX_SECONDS: z.coerce.number().int().min(1_800).max(86_400).default(86_400),
   ORDER_INTENT_TTL_SECONDS: z.coerce.number().int().min(30).max(300).default(120),
   TELEGRAM_BOT_TOKEN: z.string().min(10).optional(),
   ALERT_SEND_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
