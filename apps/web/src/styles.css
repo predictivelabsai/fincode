@@ -1133,7 +1133,7 @@ textarea::placeholder {
 
 .status-card > div strong {
   color: var(--text);
-  font: 500 0.58rem var(--mono);
+  font: 500 0.62rem var(--mono);
 }
 
 .status-card > .wallet-session-expiry {
@@ -1432,13 +1432,13 @@ input[type="checkbox"] {
 .detail-page,
 .backtest-workspace {
   min-height: calc(100vh - var(--header-height));
-  padding: 28px clamp(18px, 3vw, 42px) 48px;
+  padding: 36px clamp(18px, 3.4vw, 48px) 64px;
 }
 
 .page-title,
 .backtest-hero {
   max-width: 1440px;
-  margin: 0 auto 22px;
+  margin: 0 auto 26px;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -1473,7 +1473,7 @@ input[type="checkbox"] {
 
 .summary-strip {
   max-width: 1440px;
-  margin: 0 auto 16px;
+  margin: 0 auto 20px;
   display: grid;
   grid-template-columns: 1.2fr repeat(4, 1fr);
   border: 1px solid var(--border);
@@ -1483,7 +1483,7 @@ input[type="checkbox"] {
 
 .summary-strip > div {
   min-width: 0;
-  padding: 12px 14px;
+  padding: 13px 16px;
   border-right: 1px solid var(--border-soft);
 }
 
@@ -1493,16 +1493,17 @@ input[type="checkbox"] {
 
 .summary-strip span {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   color: var(--faint);
-  font-size: 0.58rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .summary-strip strong {
   display: block;
   overflow: hidden;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1623,6 +1624,13 @@ tbody th {
 tbody td {
   color: #bfd5c7;
   font-size: 0.65rem;
+}
+
+/* Numeric columns read right-aligned, tabular — money columns line up. */
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 tbody tr:last-child th,
@@ -1872,9 +1880,9 @@ th small {
 }
 
 .paper-equity {
-  padding: 22px 24px;
+  padding: 20px 24px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   flex-direction: column;
   border-right: 1px solid rgba(96, 165, 250, 0.16);
 }
@@ -1908,9 +1916,9 @@ th small {
 }
 
 .paper-ledger dl > div {
-  padding: 18px;
+  padding: 18px 22px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   flex-direction: column;
   border-right: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
@@ -1931,16 +1939,15 @@ th small {
 }
 
 .paper-pnl-stamp {
-  margin: 18px;
-  padding: 15px;
+  margin: 0;
+  padding: 20px 24px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   flex-direction: column;
-  border: 1px dashed rgba(96, 165, 250, 0.42);
-  border-radius: 6px;
-  background: rgba(4, 15, 25, 0.34);
-  text-align: center;
+  border-left: 1px solid rgba(96, 165, 250, 0.16);
+  background: rgba(4, 15, 25, 0.24);
+  text-align: left;
 }
 
 .paper-pnl-stamp strong {
@@ -2203,7 +2210,7 @@ th small {
 
 .paper-strategy-band > div {
   min-width: 0;
-  padding: 9px 6px;
+  padding: 10px 8px;
   border-right: 1px solid var(--border-soft);
 }
 
@@ -2213,15 +2220,17 @@ th small {
 
 .paper-strategy-band dt {
   color: #6687a3;
-  font: 0.47rem var(--mono);
+  font: 0.52rem var(--mono);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .paper-strategy-band dd {
-  margin: 4px 0 0;
+  margin: 5px 0 0;
   overflow: hidden;
   color: #dbeafe;
-  font: 500 0.53rem var(--mono);
+  font: 500 0.58rem var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2759,12 +2768,20 @@ th small {
 /* Settings */
 
 .settings-grid {
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(250px, 0.7fr) minmax(420px, 1.3fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
+}
+
+/* Security-related cards stack in their own column; alerts fills the other. */
+.settings-col {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  align-content: start;
 }
 
 .settings-card {
@@ -2818,8 +2835,21 @@ th small {
   gap: 9px;
 }
 
+/* Keep the destructive action visually in step with its sibling button. */
+.alerts-channel-actions .table-action {
+  min-height: 36px;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .alerts-add-form h3 {
   margin: 4px 0 2px;
+  grid-column: 1 / -1;
   font-size: 0.78rem;
 }
 
@@ -3839,11 +3869,16 @@ th small {
 }
 
 .config-strip > div > span {
-  padding: 8px;
+  padding: 9px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   background: var(--pane);
+}
+
+/* A lone item in the final row spans the strip so no tinted filler tracks show. */
+.config-strip > div > span:nth-child(4n + 1):last-child {
+  grid-column: 1 / -1;
 }
 
 .config-strip small {
@@ -4116,7 +4151,7 @@ th small {
   .settings-grid,
   .new-backtest-grid,
   .result-lower-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pending-action-column,
@@ -4131,9 +4166,8 @@ th small {
   .settings-card-wide {
     grid-column: auto;
   }
-
   .summary-strip {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .summary-strip > div:nth-child(3) {
@@ -4145,7 +4179,7 @@ th small {
   }
 
   .backtest-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .run-library {
@@ -4153,7 +4187,7 @@ th small {
   }
 
   .config-strip > div {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .paper-ledger {
@@ -4162,8 +4196,10 @@ th small {
 
   .paper-pnl-stamp {
     grid-column: 1 / -1;
-    min-height: 96px;
     margin-top: 0;
+    padding: 14px 24px;
+    border-left: 0;
+    border-top: 1px solid rgba(96, 165, 250, 0.16);
   }
 }
 
@@ -4322,7 +4358,7 @@ th small {
   }
 
   .summary-strip {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .summary-strip > div,
@@ -4368,7 +4404,7 @@ th small {
   }
 
   .metric-ribbon {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .result-metric,
@@ -4386,7 +4422,7 @@ th small {
   }
 
   .config-strip > div {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .tape-heading,
@@ -4421,11 +4457,13 @@ th small {
 
   .paper-pnl-stamp {
     grid-column: auto;
-    margin-top: 14px;
+    margin-top: 0;
+    border-left: 0;
+    border-top: 1px solid rgba(96, 165, 250, 0.16);
   }
 
   .paper-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .paper-data-column {
@@ -4454,7 +4492,7 @@ th small {
   }
 
   .execution-tape {
-    grid-template-columns: 1fr 10px 1fr;
+    grid-template-columns: minmax(0, 1fr) 10px minmax(0, 1fr);
   }
 
   .execution-tape > div:nth-of-type(3),
@@ -4681,14 +4719,14 @@ th small {
 .template-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .template-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px;
+  gap: 12px;
+  padding: 18px;
   background: var(--pane);
   border: 1px solid var(--border-soft);
   border-radius: 10px;
@@ -4696,7 +4734,7 @@ th small {
 
 .template-card-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
@@ -4730,30 +4768,33 @@ th small {
 
 .template-card-stats {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
   margin: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--accent-wash, transparent);
   border-radius: 8px;
 }
 
 .template-card-stats div {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
 }
 
 .template-card-stats dt {
-  font-size: 0.75rem;
-  color: var(--muted);
+  color: var(--faint);
+  font: 0.58rem var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .template-card-stats dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   font-weight: 600;
 }
 
@@ -4795,7 +4836,7 @@ th small {
 /* Public /templates landing page */
 .template-landing-hero {
   max-width: 720px;
-  padding: 32px 0 8px;
+  padding: 44px 0 16px;
 }
 
 .template-landing-hero h1 {
@@ -4816,7 +4857,7 @@ th small {
 }
 
 .template-grid-landing {
-  margin-top: 24px;
+  margin-top: 36px;
 }
 
 .template-grid-landing .template-card-description {
@@ -4828,13 +4869,13 @@ th small {
 
 .template-landing-steps {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 32px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 44px;
 }
 
 .template-landing-steps article {
-  padding: 20px;
+  padding: 22px;
   border: 1px solid var(--border-soft);
   border-radius: 12px;
   background: var(--pane);
@@ -4858,7 +4899,7 @@ th small {
 }
 
 .template-landing-footer {
-  margin-top: 32px;
+  margin-top: 44px;
   padding-top: 16px;
   border-top: 1px solid var(--border-soft);
   color: var(--muted);

@@ -168,8 +168,8 @@ function TrackRecordPositions({ positions }: { positions: PublicTrackRecordPosit
   return (
     <section className="data-section paper-table-section">
       <header><h2>Open positions</h2><span className="count-pill">{positions.length}</span></header>
-      <div className="table-scroll"><table><thead><tr><th>Market / outcome</th><th>Shares</th><th>Average cost</th><th>Liquidation</th><th>Unrealized P&amp;L</th><th>Mark</th></tr></thead><tbody>
-        {positions.map((position) => <tr key={`${position.marketQuestion}-${position.outcome}`}><th>{position.marketQuestion}<small>{position.outcome}</small></th><td>{shortNumber(position.shares)}</td><td>{formatPrice(position.averageCost)}</td><td>{formatMoney(position.liquidationValue)}</td><td className={tone(position.unrealizedPnl)}>{formatSignedMoney(position.unrealizedPnl)}</td><td><span className={`paper-mark paper-mark-${position.markStatus}`}>{position.markStatus}</span></td></tr>)}
+      <div className="table-scroll"><table><thead><tr><th>Market / outcome</th><th className="num">Shares</th><th className="num">Average cost</th><th className="num">Liquidation</th><th className="num">Unrealized P&amp;L</th><th>Mark</th></tr></thead><tbody>
+        {positions.map((position) => <tr key={`${position.marketQuestion}-${position.outcome}`}><th>{position.marketQuestion}<small>{position.outcome}</small></th><td className="num">{shortNumber(position.shares)}</td><td className="num">{formatPrice(position.averageCost)}</td><td className="num">{formatMoney(position.liquidationValue)}</td><td className={`num ${tone(position.unrealizedPnl)}`}>{formatSignedMoney(position.unrealizedPnl)}</td><td><span className={`paper-mark paper-mark-${position.markStatus}`}>{position.markStatus}</span></td></tr>)}
       </tbody></table></div>
       {!positions.length && <p className="table-empty">No open paper positions.</p>}
     </section>
@@ -180,8 +180,8 @@ function TrackRecordFills({ fills }: { fills: PublicTrackRecordFill[] }) {
   return (
     <section className="data-section paper-table-section">
       <header><h2>Recent fills</h2><span className="count-pill">{fills.length}</span></header>
-      <div className="table-scroll"><table><thead><tr><th>Time</th><th>Market / outcome</th><th>Type</th><th>Shares</th><th>VWAP</th><th>Fee</th><th>Cash effect</th><th>Realized P&amp;L</th></tr></thead><tbody>
-        {fills.map((fill) => <tr key={fill.fillId}><td>{formatDate(fill.createdAt)}</td><th>{fill.marketQuestion}<small>{fill.outcome}</small></th><td><span className={`paper-fill-kind paper-fill-${fill.kind.toLowerCase()}`}>{fill.kind}</span></td><td>{shortNumber(fill.shares)}</td><td>{formatPrice(fill.averagePrice)}</td><td>{formatMoney(fill.fee)}</td><td className={tone(fill.cashEffect)}>{formatSignedMoney(fill.cashEffect)}</td><td className={tone(fill.realizedPnl)}>{fill.kind === "BUY" ? "—" : formatSignedMoney(fill.realizedPnl)}</td></tr>)}
+      <div className="table-scroll"><table><thead><tr><th>Time</th><th>Market / outcome</th><th>Type</th><th className="num">Shares</th><th className="num">VWAP</th><th className="num">Fee</th><th className="num">Cash effect</th><th className="num">Realized P&amp;L</th></tr></thead><tbody>
+        {fills.map((fill) => <tr key={fill.fillId}><td>{formatDate(fill.createdAt)}</td><th>{fill.marketQuestion}<small>{fill.outcome}</small></th><td><span className={`paper-fill-kind paper-fill-${fill.kind.toLowerCase()}`}>{fill.kind}</span></td><td className="num">{shortNumber(fill.shares)}</td><td className="num">{formatPrice(fill.averagePrice)}</td><td className="num">{formatMoney(fill.fee)}</td><td className={`num ${tone(fill.cashEffect)}`}>{formatSignedMoney(fill.cashEffect)}</td><td className={`num ${tone(fill.realizedPnl)}`}>{fill.kind === "BUY" ? "—" : formatSignedMoney(fill.realizedPnl)}</td></tr>)}
       </tbody></table></div>
       {!fills.length && <p className="table-empty">No fills recorded yet.</p>}
     </section>

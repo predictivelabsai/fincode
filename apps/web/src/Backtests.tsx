@@ -609,8 +609,8 @@ function TradeLedger({ trades, page, total, onPage }: {
     <section className="trade-ledger">
       <div className="ledger-heading"><div><span className="eyebrow">Execution ledger</span><h3>Every modeled fill</h3></div><span>{total} trades</span></div>
       {trades.length === 0 ? <p className="ledger-empty">No qualifying strategy signal was filled.</p> : (
-        <div className="table-scroll"><table><thead><tr><th>#</th><th>Outcome</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Reason</th><th>P&amp;L</th></tr></thead><tbody>
-          {trades.map((trade) => <tr key={trade.tradeIndex}><td>{trade.tradeIndex + 1}</td><td><span className={`outcome-chip outcome-${trade.outcome.toLowerCase()}`}>{trade.outcome}</span></td><td>{trade.entryPrice}<small>{formatShortDate(trade.entryAt)}</small></td><td>{trade.exitPrice}<small>{formatShortDate(trade.exitAt)}</small></td><td>{Number(trade.shares).toFixed(2)}</td><td>{reasonLabel(trade.exitReason)}</td><td className={Number(trade.pnl) >= 0 ? "value-positive" : "value-negative"}>{money(trade.pnl)}</td></tr>)}
+        <div className="table-scroll"><table><thead><tr><th className="num">#</th><th>Outcome</th><th>Entry</th><th>Exit</th><th className="num">Shares</th><th>Reason</th><th className="num">P&amp;L</th></tr></thead><tbody>
+          {trades.map((trade) => <tr key={trade.tradeIndex}><td className="num">{trade.tradeIndex + 1}</td><td><span className={`outcome-chip outcome-${trade.outcome.toLowerCase()}`}>{trade.outcome}</span></td><td>{trade.entryPrice}<small>{formatShortDate(trade.entryAt)}</small></td><td>{trade.exitPrice}<small>{formatShortDate(trade.exitAt)}</small></td><td className="num">{Number(trade.shares).toFixed(2)}</td><td>{reasonLabel(trade.exitReason)}</td><td className={`num ${Number(trade.pnl) >= 0 ? "value-positive" : "value-negative"}`}>{money(trade.pnl)}</td></tr>)}
         </tbody></table></div>
       )}
       {total > TRADE_PAGE_SIZE && (
@@ -649,8 +649,8 @@ function ComparisonPanel({ envelopes, onClose }: { envelopes: BacktestRunEnvelop
   return (
     <section className="comparison-panel" aria-labelledby="comparison-heading">
       <header><div><span className="eyebrow">Side-by-side audit</span><h2 id="comparison-heading">Run comparison</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close comparison"><X /></button></header>
-      <div className="table-scroll"><table><thead><tr><th>Market</th><th>Strategy</th><th>Return</th><th>Drawdown</th><th>Trades</th><th>Win rate</th><th>Fees</th><th>Capital</th></tr></thead><tbody>
-        {envelopes.map(({ run, result }) => <tr key={run.runId}><th>{run.marketQuestion || compactId(run.marketId)}<small>{compactId(run.runId)}</small></th><td>{strategyLabel(run.config.strategy)}</td><td className={Number(result?.metrics.returnPct || 0) >= 0 ? "value-positive" : "value-negative"}>{result ? percent(result.metrics.returnPct) : "—"}</td><td>{result ? percent(result.metrics.maxDrawdownPct) : "—"}</td><td>{result?.metrics.tradeCount ?? "—"}</td><td>{result ? percent(result.metrics.winRatePct) : "—"}</td><td>{result ? money(result.metrics.fees) : "—"}</td><td>{money(run.config.initialCapital)}</td></tr>)}
+      <div className="table-scroll"><table><thead><tr><th>Market</th><th>Strategy</th><th className="num">Return</th><th className="num">Drawdown</th><th className="num">Trades</th><th className="num">Win rate</th><th className="num">Fees</th><th className="num">Capital</th></tr></thead><tbody>
+        {envelopes.map(({ run, result }) => <tr key={run.runId}><th>{run.marketQuestion || compactId(run.marketId)}<small>{compactId(run.runId)}</small></th><td>{strategyLabel(run.config.strategy)}</td><td className={`num ${Number(result?.metrics.returnPct || 0) >= 0 ? "value-positive" : "value-negative"}`}>{result ? percent(result.metrics.returnPct) : "—"}</td><td className="num">{result ? percent(result.metrics.maxDrawdownPct) : "—"}</td><td className="num">{result?.metrics.tradeCount ?? "—"}</td><td className="num">{result ? percent(result.metrics.winRatePct) : "—"}</td><td className="num">{result ? money(result.metrics.fees) : "—"}</td><td className="num">{money(run.config.initialCapital)}</td></tr>)}
       </tbody></table></div>
     </section>
   );

@@ -440,8 +440,8 @@ function PaperPositions({ portfolio }: { portfolio: PaperPortfolio | null }) {
   return (
     <section className="data-section paper-table-section">
       <header><h2>Holdings</h2><span className="count-pill">{portfolio?.positions.length ?? 0}</span></header>
-      <div className="table-scroll"><table><thead><tr><th>Market / outcome</th><th>Shares</th><th>Average cost</th><th>Best bid</th><th>Liquidation</th><th>Unrealized P&amp;L</th><th>Mark</th></tr></thead><tbody>
-        {portfolio?.positions.map((position) => <tr key={position.tokenId}><th>{position.marketQuestion}<small>{position.outcome}</small></th><td>{shortNumber(position.shares)}</td><td>{formatPrice(position.averageCost)}</td><td>{formatPrice(position.bestBid)}</td><td>{formatMoney(position.liquidationValue)}</td><td className={tone(position.unrealizedPnl)}>{formatSignedMoney(position.unrealizedPnl)}</td><td><span className={`paper-mark paper-mark-${position.markStatus}`}>{position.markStatus}</span><small>{position.markedAt ? formatTime(position.markedAt) : "Not priced"}</small></td></tr>)}
+      <div className="table-scroll"><table><thead><tr><th>Market / outcome</th><th className="num">Shares</th><th className="num">Average cost</th><th className="num">Best bid</th><th className="num">Liquidation</th><th className="num">Unrealized P&amp;L</th><th>Mark</th></tr></thead><tbody>
+        {portfolio?.positions.map((position) => <tr key={position.tokenId}><th>{position.marketQuestion}<small>{position.outcome}</small></th><td className="num">{shortNumber(position.shares)}</td><td className="num">{formatPrice(position.averageCost)}</td><td className="num">{formatPrice(position.bestBid)}</td><td className="num">{formatMoney(position.liquidationValue)}</td><td className={`num ${tone(position.unrealizedPnl)}`}>{formatSignedMoney(position.unrealizedPnl)}</td><td><span className={`paper-mark paper-mark-${position.markStatus}`}>{position.markStatus}</span><small>{position.markedAt ? formatTime(position.markedAt) : "Not priced"}</small></td></tr>)}
       </tbody></table></div>
       {!portfolio?.positions.length && <p className="table-empty">No paper holdings yet. Preview a buy to start the ledger.</p>}
     </section>
@@ -454,7 +454,7 @@ function PaperFills(props: { fills: PaperFillsResponse | null; offset: number; o
   return (
     <section className="data-section paper-table-section">
       <header><h2>Paper fills</h2><div className="paper-pagination"><span className="count-pill">{props.fills?.total ?? 0}</span><button type="button" aria-label="Previous paper fills" disabled={!hasPrevious} onClick={() => props.onPage(Math.max(0, props.offset - FILL_PAGE_SIZE))}><ChevronLeft /></button><button type="button" aria-label="Next paper fills" disabled={!hasNext} onClick={() => props.onPage(props.offset + FILL_PAGE_SIZE)}><ChevronRight /></button></div></header>
-      <div className="table-scroll"><table><thead><tr><th>Time</th><th>Market / outcome</th><th>Type</th><th>Shares</th><th>VWAP</th><th>Fee</th><th>Cash effect</th><th>Realized P&amp;L</th></tr></thead><tbody>
+      <div className="table-scroll"><table><thead><tr><th>Time</th><th>Market / outcome</th><th>Type</th><th className="num">Shares</th><th className="num">VWAP</th><th className="num">Fee</th><th className="num">Cash effect</th><th className="num">Realized P&amp;L</th></tr></thead><tbody>
         {props.fills?.items.map((fill) => <PaperFillRow key={fill.fillId} fill={fill} />)}
       </tbody></table></div>
       {!props.fills?.items.length && <p className="table-empty">No simulated fills or settlements recorded.</p>}
@@ -463,7 +463,7 @@ function PaperFills(props: { fills: PaperFillsResponse | null; offset: number; o
 }
 
 function PaperFillRow({ fill }: { fill: PaperFill }) {
-  return <tr><td>{formatDate(fill.createdAt)}</td><th>{fill.marketQuestion}<small>{fill.outcome}</small></th><td><span className={`paper-fill-kind paper-fill-${fill.kind.toLowerCase()}`}>{fill.kind}</span></td><td>{shortNumber(fill.shares)}</td><td>{formatPrice(fill.averagePrice)}</td><td>{formatMoney(fill.fee)}</td><td className={tone(fill.cashEffect)}>{formatSignedMoney(fill.cashEffect)}</td><td className={tone(fill.realizedPnl)}>{fill.kind === "BUY" ? "—" : formatSignedMoney(fill.realizedPnl)}</td></tr>;
+  return <tr><td>{formatDate(fill.createdAt)}</td><th>{fill.marketQuestion}<small>{fill.outcome}</small></th><td><span className={`paper-fill-kind paper-fill-${fill.kind.toLowerCase()}`}>{fill.kind}</span></td><td className="num">{shortNumber(fill.shares)}</td><td className="num">{formatPrice(fill.averagePrice)}</td><td className="num">{formatMoney(fill.fee)}</td><td className={`num ${tone(fill.cashEffect)}`}>{formatSignedMoney(fill.cashEffect)}</td><td className={`num ${tone(fill.realizedPnl)}`}>{fill.kind === "BUY" ? "—" : formatSignedMoney(fill.realizedPnl)}</td></tr>;
 }
 
 function ownedShares(portfolio: PaperPortfolio | null, tokenId: string): string {
