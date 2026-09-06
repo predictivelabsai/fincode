@@ -199,6 +199,7 @@ describe("PaperWorkspace strategy templates", () => {
     expect(screen.getByText("Overreaction fade")).toBeInTheDocument();
     expect(screen.getByText("Resolution grinder")).toBeInTheDocument();
     expect(screen.getAllByText("Illustrative").length).toBeGreaterThanOrEqual(5);
+    expect(screen.getByRole("region", { name: "First paper strategy guide" })).toHaveTextContent("Choose a ready-made plan");
   });
 
   it("arms the template and pre-fills the search on deploy", async () => {
@@ -209,6 +210,16 @@ describe("PaperWorkspace strategy templates", () => {
     await act(async () => flushPromises());
     expect(client.searchMarkets).toHaveBeenCalledWith("election winner", "active", 20);
     expect(screen.getByText(/Template · Longshot fade/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "First paper strategy guide" })).toHaveTextContent("Choose a live market");
+  });
+
+  it("lets a trader dismiss the first-value guide permanently", async () => {
+    render(<PaperWorkspace client={templateClient()} onError={vi.fn()} onNotice={vi.fn()} />);
+    await act(async () => flushPromises());
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss first paper strategy guide" }));
+    expect(screen.queryByRole("region", { name: "First paper strategy guide" })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("polytrade.first-value-guide-dismissed")).toBe("true");
   });
 
   it("opens an active market handed off from another workspace", async () => {

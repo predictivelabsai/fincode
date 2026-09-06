@@ -24,6 +24,7 @@ import {
 } from "@polytrade/contracts";
 
 import { GatewayClient, GatewayError } from "./api";
+import { FirstValueGuide, type FirstValueStep } from "./FirstValueGuide";
 import { MarketFocus } from "./MarketFocus";
 import { PaperStrategyRunner } from "./PaperStrategy";
 import { ShareCard } from "./TrackRecord";
@@ -201,6 +202,13 @@ export function PaperWorkspace(props: {
     const index = selectedMarket.clobTokenIds.indexOf(selectedTokenId);
     return index < 0 ? null : selectedMarket.outcomes[index] ?? null;
   }, [selectedMarket, selectedTokenId]);
+
+  const firstValueStep = useMemo<FirstValueStep>(() => {
+    if (strategySnapshot?.strategy?.status === "RUNNING") return "running";
+    if (selectedMarket) return "review";
+    if (activeTemplate) return "market";
+    return "template";
+  }, [activeTemplate, selectedMarket, strategySnapshot?.strategy?.status]);
 
   const request = useMemo<PaperQuoteRequest | null>(() => {
     if (!selectedMarket || !selectedTokenId) return null;
@@ -382,6 +390,8 @@ export function PaperWorkspace(props: {
           <div><strong>Some prices could not be refreshed</strong>{portfolio.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div>
         </section>
       ) : null}
+
+      <FirstValueGuide step={firstValueStep} />
 
       <StrategyTemplateGrid
         templates={strategyTemplates}

@@ -4896,6 +4896,117 @@ body.paper-resizing * {
 
 /* Strategy templates */
 
+.first-value-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 22px 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--accent-wash) 54%, transparent);
+}
+
+.first-value-guide-progress {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.first-value-guide-progress span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 0.62rem var(--mono);
+}
+
+.first-value-guide-progress span.is-current {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.first-value-guide-progress span.is-complete {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border-soft));
+  color: var(--accent);
+}
+
+.first-value-guide-progress svg {
+  width: 13px;
+  height: 13px;
+}
+
+.first-value-guide-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.first-value-guide-copy strong {
+  font-size: 0.84rem;
+}
+
+.first-value-guide-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.first-value-guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.first-value-guide-actions .button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+}
+
+.first-value-guide-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+@media (max-width: 767px) {
+  .first-value-guide {
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: 10px;
+    padding: 14px 0;
+  }
+
+  .first-value-guide-progress {
+    grid-column: 1;
+  }
+
+  .first-value-guide-copy {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .first-value-guide-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .first-value-guide-actions .button,
+  .first-value-guide-actions .icon-button {
+    min-height: 44px;
+  }
+
+  .first-value-guide-actions .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .template-grid-section {
   display: flex;
   flex-direction: column;
