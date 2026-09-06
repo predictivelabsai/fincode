@@ -41,7 +41,7 @@ import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
-import { maximumExposure } from "./order";
+import { DEFAULT_CASH_EXPOSURE_LIMIT, maximumExposure, orderRiskSummary, parseCashExposureLimit } from "./order";
 import { connectWallet, signTypedPayload, type ConnectedWallet } from "./wallet";
 
 interface DeskMessage {
@@ -653,6 +653,12 @@ export function ProposalTicket(props: {
 }) {
   const { draft } = props;
   const [fieldsValid, setFieldsValid] = useState(true);
+  const [cashExposureLimit, setCashExposureLimit] = useState(() => loadCashExposureLimit());
+  const [riskConfirmed, setRiskConfirmed] = useState(false);
+  // Any proposal edit changes the exact data the wallet will sign, so it must
+  // invalidate the previous worst-case acknowledgement as well.
+  const riskKey = draft?.proposal.action === "create" ? JSON.stringify(draft.proposal) : "";
+  useEffect(() => setRiskConfirmed(false), [riskKey]);
   if (!draft) {
     return (
       <section className="ticket ticket-empty" aria-labelledby="ticket-heading">
@@ -666,9 +672,12 @@ export function ProposalTicket(props: {
 
   const expired = new Date(draft.expiresAt).getTime() <= Date.now();
   const proposal = draft.proposal;
+  const risk = proposal.action === "create" ? orderRiskSummary(proposal) : null;
+  const parsedLimit = parseCashExposureLimit(cashExposureLimit);
+  const limitExceeded = risk !== null && risk.cashExposure !== null && (parsedLimit === null || risk.cashExposure > parsedLimit);
   const geographyAllowsAction = proposal.action === "cancel" || props.tradeAllowed || props.pendingSignedOrder;
   const timeAllowsAction = !expired || props.pendingSignedOrder;
-  const canExecute = props.reviewed && props.sessionReady && geographyAllowsAction && timeAllowsAction && !props.submitting && (proposal.action === "cancel" || fieldsValid);
+  const canExecute = props.reviewed && props.sessionReady && geographyAllowsAction && timeAllowsAction && !props.submitting && (proposal.action === "cancel" || (fieldsValid && !limitExceeded && riskConfirmed));
   const actionLabel = props.pendingSignedOrder
     ? "Reconcile signed order"
     : proposal.action === "cancel"
@@ -692,6 +701,15 @@ export function ProposalTicket(props: {
         <CancellationSummary selector={proposal.selector} rationale={proposal.rationale} />
       )}
 
+      {risk ? (
+        <OrderGuardrails
+          limit={cashExposureLimit}
+          limitExceeded={limitExceeded}
+          onLimitChange={setCashExposureLimit}
+          risk={risk}
+        />
+      ) : null}
+
       <div className="ticket-expiry">
         <Clock3 aria-hidden="true" /> {expired && !props.pendingSignedOrder ? "Expired — refresh before signing" : props.pendingSignedOrder ? "Exact signed intent retained for reconciliation" : `Draft expires ${formatTime(draft.expiresAt)}`}
       </div>
@@ -703,16 +721,67 @@ export function ProposalTicket(props: {
         />
         <span>I reviewed the exact market, side, quantity, price protection, and expiry.</span>
       </label>
+      {risk ? (
+        <label className="review-check risk-confirmation">
+          <input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} />
+          <span>I understand the worst case: {risk.worstCase}</span>
+        </label>
+      ) : null}
       <button className="button button-primary button-wide" type="button" onClick={props.onExecute} disabled={!canExecute}>
         {props.submitting ? "Waiting for wallet…" : actionLabel} <ArrowRight aria-hidden="true" />
       </button>
       {proposal.action === "create" && !fieldsValid && <p className="restriction-note">Fix the highlighted fields — this exact text would be signed.</p>}
+      {limitExceeded && <p className="restriction-note" role="alert">This order exceeds the browser cash guard. Raise the guard deliberately or reduce the buy amount before signing.</p>}
       {!props.sessionReady && <p className="restriction-note">Connect and verify the wallet before signing.</p>}
       {!props.tradeAllowed && proposal.action === "create" && !props.pendingSignedOrder && <p className="restriction-note">Real orders are disabled until geographic eligibility is verified.</p>}
       {props.pendingSignedOrder && <p className="reconcile-note">The browser retained this exact signed intent after an uncertain response. Reconcile checks the same order hash; it does not create a replacement order.</p>}
       <p className="ticket-warning">This draft is neither a paper order nor a submitted order. A new order exists only if your wallet signs the exact intent and the gateway accepts it.</p>
     </section>
   );
+}
+
+function OrderGuardrails(props: {
+  limit: string;
+  limitExceeded: boolean;
+  onLimitChange: (value: string) => void;
+  risk: ReturnType<typeof orderRiskSummary>;
+}) {
+  return (
+    <section className={`order-guardrails ${props.limitExceeded ? "order-guardrails-blocked" : ""}`} aria-label="Order risk checks" aria-live="polite">
+      <div className="order-guardrails-heading"><ShieldCheck aria-hidden="true" /><strong>Order risk checks</strong><span>{props.risk.stale ? "Stale data" : "Current draft"}</span></div>
+      <dl>
+        <div><dt>Worst case</dt><dd>{props.risk.maximumExposure}</dd></div>
+        <div><dt>Price protection</dt><dd>{props.risk.priceProtection}</dd></div>
+      </dl>
+      {props.risk.cashExposure !== null ? (
+        <label className="cash-guard-field">
+          <span>Browser cash guard (USDC)</span>
+          <input aria-label="Browser cash guard (USDC)" inputMode="decimal" value={props.limit} onChange={(event) => {
+            props.onLimitChange(event.target.value);
+            saveCashExposureLimit(event.target.value);
+          }} />
+        </label>
+      ) : <p className="order-guardrails-note">This sell order exposes inventory, not new cash. Confirm that the shares are available before signing.</p>}
+      {props.risk.stale ? <p className="order-guardrails-warning"><Clock3 aria-hidden="true" /> Market observation is over two minutes old. Refresh the research before signing.</p> : null}
+      <p className="order-guardrails-note">Browser guard only — the venue and your wallet remain the source of truth.</p>
+    </section>
+  );
+}
+
+function loadCashExposureLimit(): string {
+  try {
+    return window.localStorage.getItem("polytrade.cash-exposure-limit") ?? String(DEFAULT_CASH_EXPOSURE_LIMIT);
+  } catch {
+    return String(DEFAULT_CASH_EXPOSURE_LIMIT);
+  }
+}
+
+function saveCashExposureLimit(value: string): void {
+  try {
+    window.localStorage.setItem("polytrade.cash-exposure-limit", value);
+  } catch {
+    // A private browsing policy should not prevent the local guard from working for this page.
+  }
 }
 
 type EditableField = "price" | "size" | "amount" | "limitPrice" | "expiration";
