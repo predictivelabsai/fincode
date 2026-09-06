@@ -659,7 +659,7 @@ describe("routed workspace", () => {
 
     renderRoute("/settings");
 
-    expect((await screen.findByText("Browser IP check")).parentElement).toHaveTextContent("Research only");
+    await waitFor(() => expect(screen.getByText("Browser IP check").parentElement).toHaveTextContent("Research only"));
     expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeDisabled();
     expect(screen.getByText(/New orders are unavailable in AU/i)).toBeInTheDocument();
   });
