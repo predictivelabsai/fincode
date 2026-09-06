@@ -365,7 +365,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 describe("routed workspace", () => {
   it("loads deep-linked threads and switches without mixing messages", async () => {
@@ -749,6 +752,21 @@ describe("routed workspace", () => {
       limitPrice: "0.420000",
     }, expect.any(String)));
     expect(mocks.attachWallet).not.toHaveBeenCalled();
+  });
+
+  it("hands an active paper market into a prefilled research chat", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("polytrade.market-focus", JSON.stringify(paperMarket));
+    renderRoute("/paper?focus=paper-condition");
+
+    expect(await screen.findByLabelText("Market in focus")).toHaveTextContent("Will the paper workspace pass?");
+    const handoff = screen.getByRole("link", { name: /Ask agent/i });
+    expect(handoff).toHaveAttribute("href", "/chat/new?focus=paper-condition");
+
+    await user.click(handoff);
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/chat/new"));
+    expect((screen.getByRole("textbox", { name: "Ask PolyTrade" }) as HTMLTextAreaElement).value).toContain("Will the paper workspace pass?");
   });
 
   it("starts and stops a persistent background paper strategy", async () => {

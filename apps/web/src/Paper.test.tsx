@@ -4,10 +4,12 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import type { GatewayClient } from "./api";
 import { PaperWorkspace } from "./Paper";
 import { ShareCard } from "./TrackRecord";
+import type { MarketSearchMarket } from "@polytrade/contracts";
 
 // CI has no .env.local; ShareCard's module pulls env at import time.
 vi.mock("./env", () => ({
@@ -142,9 +144,12 @@ describe("ShareCard", () => {
   });
 });
 
-const templateMarket = {
+const templateMarket: MarketSearchMarket = {
+  id: "template-market",
   conditionId: "0xtemplatecondition",
+  slug: "template-market",
   question: "Will the template market resolve?",
+  description: "Fixture market",
   outcomes: ["Yes", "No"],
   outcomePrices: ["0.90", "0.10"],
   clobTokenIds: ["100", "101"],
@@ -156,6 +161,12 @@ const templateMarket = {
   restricted: false,
   minimumOrderSize: "5",
   minimumTickSize: "0.01",
+  endDate: null,
+  startDate: null,
+  createdAt: null,
+  closedTime: null,
+  liquidity: "100000",
+  volume: "500000",
 };
 
 function templateClient() {
@@ -188,6 +199,7 @@ describe("PaperWorkspace strategy templates", () => {
     expect(screen.getByText("Overreaction fade")).toBeInTheDocument();
     expect(screen.getByText("Resolution grinder")).toBeInTheDocument();
     expect(screen.getAllByText("Illustrative").length).toBeGreaterThanOrEqual(5);
+    expect(screen.getByRole("region", { name: "First paper strategy guide" })).toHaveTextContent("Choose a ready-made plan");
   });
 
   it("arms the template and pre-fills the search on deploy", async () => {
@@ -198,6 +210,28 @@ describe("PaperWorkspace strategy templates", () => {
     await act(async () => flushPromises());
     expect(client.searchMarkets).toHaveBeenCalledWith("election winner", "active", 20);
     expect(screen.getByText(/Template · Longshot fade/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "First paper strategy guide" })).toHaveTextContent("Choose a live market");
+  });
+
+  it("lets a trader dismiss the first-value guide permanently", async () => {
+    render(<PaperWorkspace client={templateClient()} onError={vi.fn()} onNotice={vi.fn()} />);
+    await act(async () => flushPromises());
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss first paper strategy guide" }));
+    expect(screen.queryByRole("region", { name: "First paper strategy guide" })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("polytrade.first-value-guide-dismissed")).toBe("true");
+  });
+
+  it("opens an active market handed off from another workspace", async () => {
+    render(
+      <MemoryRouter>
+        <PaperWorkspace client={templateClient()} onError={vi.fn()} onNotice={vi.fn()} initialMarket={templateMarket} />
+      </MemoryRouter>,
+    );
+    await act(async () => flushPromises());
+
+    expect(screen.getByText("Market in focus")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Ask agent/ })).toHaveAttribute("href", "/chat/new?focus=0xtemplatecondition");
   });
 
   it("starts a template strategy with template-derived absolute prices", async () => {

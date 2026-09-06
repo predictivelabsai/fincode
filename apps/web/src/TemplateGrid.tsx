@@ -16,7 +16,7 @@ export function StrategyTemplateGrid(props: {
 }) {
   const landing = props.variant === "landing";
   return (
-    <section className={`template-grid-section ${landing ? "template-grid-landing" : ""}`} aria-label="Strategy templates">
+    <section className={`template-grid-section ${landing ? "template-grid-landing" : ""}`} id="strategy-templates" aria-label="Strategy templates">
       <header className="template-grid-header">
         <div>
           <span className="eyebrow">One-click strategies</span>

@@ -92,6 +92,8 @@ import { AlertsSettings } from "./Alerts";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { MarketFocus } from "./MarketFocus";
+import { clearMarketFocus, loadMarketFocus, researchPrompt, saveMarketFocus } from "./market-focus";
 import { PaperWorkspace } from "./Paper";
 import { connectWallet, signTypedPayload, type ConnectedWallet } from "./wallet";
 
@@ -868,6 +870,7 @@ function ChatThreadPage() {
 
 function ChatPage({ threadId }: { threadId?: string }) {
   const workspace = useWorkspace();
+  const location = useLocation();
   const [question, setQuestion] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -877,6 +880,8 @@ function ChatPage({ threadId }: { threadId?: string }) {
   const historyDrawerRef = useRef<HTMLElement>(null);
   const activityDrawerRef = useRef<HTMLElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const focusedMarket = loadMarketFocus(new URLSearchParams(location.search).get("focus"));
+  const focusPromptRef = useRef<string | null>(null);
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     historyButtonRef.current?.focus();
@@ -890,6 +895,12 @@ function ChatPage({ threadId }: { threadId?: string }) {
   useEffect(() => {
     if (threadId) void workspace.loadThread(threadId);
   }, [threadId, workspace.loadThread]);
+
+  useEffect(() => {
+    if (threadId || !focusedMarket || focusPromptRef.current === focusedMarket.conditionId) return;
+    focusPromptRef.current = focusedMarket.conditionId;
+    setQuestion((current) => current || researchPrompt(focusedMarket));
+  }, [focusedMarket, threadId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1272,6 +1283,7 @@ function PaperPage() {
   const workspace = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTemplateId = searchParams.get("template");
+  const initialMarket = loadMarketFocus(searchParams.get("focus"));
   // Consume ?template= once it has armed the workspace so a refresh does not
   // re-arm it. Keeps PaperWorkspace itself router-free for its tests.
   const consumeInitialTemplate = useCallback(() => {
@@ -1291,6 +1303,9 @@ function PaperPage() {
       onNotice={onNotice}
       initialTemplateId={initialTemplateId}
       onInitialTemplateConsumed={consumeInitialTemplate}
+      initialMarket={initialMarket}
+      onMarketSelected={saveMarketFocus}
+      onMarketCleared={clearMarketFocus}
     />
   );
 }
@@ -1479,6 +1494,7 @@ function NewBacktestPage() {
   const workspace = useWorkspace();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const focusedMarket = loadMarketFocus(searchParams.get("focus"));
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MarketSearchMarket[]>([]);
   const [selected, setSelected] = useState<MarketSearchMarket | null>(null);
@@ -1512,6 +1528,7 @@ function NewBacktestPage() {
   });
   const parsed = backtestConfigSchema.safeParse(configFromForm(strategy, common, drafts));
   const selectedStrategy = BACKTEST_STRATEGIES.find((item) => item.id === strategy)!;
+  const initialMarketRef = useRef<string | null>(null);
 
   const runSearch = useCallback(async (term: string) => {
     if (!term.trim()) return;
@@ -1555,6 +1572,14 @@ function NewBacktestPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!focusedMarket || initialMarketRef.current === focusedMarket.conditionId) return;
+    initialMarketRef.current = focusedMarket.conditionId;
+    if (!isBacktestEligibleMarket(focusedMarket)) return;
+    setSelected(focusedMarket);
+    setQuery(focusedMarket.question);
+  }, [focusedMarket]);
+
   const search = async (event: FormEvent) => {
     event.preventDefault();
     await runSearch(query);
@@ -1590,13 +1615,14 @@ function NewBacktestPage() {
           </form>
           <div className="market-results">
             {results.map((market) => (
-              <button className={selected?.id === market.id ? "market-result-selected" : ""} key={market.id} type="button" onClick={() => setSelected(market)}>
+              <button className={selected?.id === market.id ? "market-result-selected" : ""} key={market.id} type="button" onClick={() => { setSelected(market); saveMarketFocus(market); }}>
                 <span><strong>{market.question}</strong><small>{market.outcomes.join(" / ")} · resolved {market.closedTime ? formatDate(market.closedTime) : "market"}</small></span>
                 <span>{selected?.id === market.id ? <Check /> : <ChevronRight />}</span>
               </button>
             ))}
             {!results.length && query && !searching && <p className="pane-empty">No eligible markets found. Backtests require resolved binary CLOB V2 markets created on or after April 28, 2026.</p>}
           </div>
+          {selected ? <MarketFocus market={selected} showBacktestAction={false} onClear={() => { setSelected(null); clearMarketFocus(); }} /> : null}
         </section>
 
         <section className="form-card">
