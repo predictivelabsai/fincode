@@ -24,6 +24,7 @@ import {
 } from "@polytrade/contracts";
 
 import { GatewayClient, GatewayError } from "./api";
+import { MarketFocus } from "./MarketFocus";
 import { PaperStrategyRunner } from "./PaperStrategy";
 import { ShareCard } from "./TrackRecord";
 import { StrategyTemplateGrid } from "./TemplateGrid";
@@ -37,6 +38,9 @@ export function PaperWorkspace(props: {
   onNotice: (message: string) => void;
   initialTemplateId?: string | null;
   onInitialTemplateConsumed?: () => void;
+  initialMarket?: MarketSearchMarket | null;
+  onMarketSelected?: (market: MarketSearchMarket) => void;
+  onMarketCleared?: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const resizingRef = useRef(false);
@@ -63,6 +67,7 @@ export function PaperWorkspace(props: {
   const pollBusyRef = useRef(false);
   const pollFailedRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const initialMarketRef = useRef<string | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem("polytrade.paper.side-width", String(sideWidth));
@@ -249,7 +254,26 @@ export function PaperWorkspace(props: {
     setSelectedTokenId(templateTokenId ?? market.clobTokenIds[0] ?? "");
     setShareQuantity("");
     clearPreview();
+    props.onMarketSelected?.(market);
   };
+
+  const clearMarket = () => {
+    setSelectedMarket(null);
+    setSelectedTokenId("");
+    setShareQuantity("");
+    clearPreview();
+    props.onMarketCleared?.();
+  };
+
+  useEffect(() => {
+    const market = props.initialMarket;
+    if (!market || initialMarketRef.current === market.conditionId) return;
+    initialMarketRef.current = market.conditionId;
+    if (!market.active || market.closed || !market.acceptingOrders || !market.enableOrderBook) return;
+    setSelectedMarket(market);
+    setSelectedTokenId(market.clobTokenIds[0] ?? "");
+    setQuery(market.question);
+  }, [props.initialMarket]);
 
   const deployTemplate = (template: StrategyTemplate) => {
     setActiveTemplate(template);
@@ -364,6 +388,8 @@ export function PaperWorkspace(props: {
         onDeploy={deployTemplate}
         runningBlocked={strategySnapshot?.strategy?.status === "RUNNING"}
       />
+
+      {selectedMarket ? <MarketFocus market={selectedMarket} onClear={clearMarket} /> : null}
 
       <div className="paper-grid" ref={gridRef} style={{ "--paper-side-width": `${sideWidth}px` } as React.CSSProperties}>
         <div className="paper-data-column">

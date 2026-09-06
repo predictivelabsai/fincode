@@ -4820,6 +4820,80 @@ body.paper-resizing * {
   flex-wrap: wrap;
 }
 
+/* A single market can travel between research, paper, and historical replay. */
+.market-focus {
+  margin: 16px 0;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--accent-wash), transparent 42%), var(--pane);
+}
+
+.market-focus > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.market-focus strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-focus small,
+.market-focus-note {
+  color: var(--muted);
+  font: 0.58rem var(--mono);
+}
+
+.market-focus-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.market-focus-actions .button {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 0.64rem;
+}
+
+.market-focus-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+@media (max-width: 767px) {
+  .market-focus {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .market-focus-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .market-focus-actions .button,
+  .market-focus-actions .icon-button {
+    min-height: 44px;
+  }
+
+  .market-focus-actions .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 /* Strategy templates */
 
 .template-grid-section {
