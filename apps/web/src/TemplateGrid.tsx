@@ -39,7 +39,7 @@ export function StrategyTemplateGrid(props: {
               <div><dt>Trades</dt><dd>{template.stats.tradeCount}</dd></div>
               <div><dt>Max drawdown</dt><dd>−{template.stats.maxDrawdownPct}%</dd></div>
             </dl>
-            <p className="template-card-basis">{template.stats.basis}</p>
+            <p className="template-card-basis"><span>Evidence</span>{template.stats.basis}</p>
             {landing ? (
               <div className="template-card-actions">
                 <Link className="button button-primary" to={props.deployPath?.(template) ?? `/paper?template=${template.id}`}>

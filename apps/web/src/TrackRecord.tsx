@@ -78,9 +78,11 @@ export default function TrackRecordPage() {
           <h1>{record.profile.displayName}</h1>
           <p>Shared paper-trading performance. Virtual USDC only — no wallet, no real funds.</p>
         </div>
+        <PublicShareButton />
       </header>
 
       <TrackRecordSummary record={record} />
+      <TrackRecordEvidence record={record} />
 
       <section className="data-section track-record-curve" aria-label="Equity curve">
         <header><h2>Equity curve</h2><span className="count-pill">{record.equityCurve.length}</span></header>
@@ -128,6 +130,34 @@ function TrackRecordSummary({ record }: { record: PublicTrackRecord }) {
 
 function SummaryStat(props: { label: string; value: string; tone?: string }) {
   return <span><strong className={props.tone}>{props.value}</strong><small>{props.label}</small></span>;
+}
+
+function TrackRecordEvidence({ record }: { record: PublicTrackRecord }) {
+  const firstCurvePoint = record.equityCurve[0]?.t ?? record.profile.startedAt;
+  return <section className="track-record-evidence" aria-labelledby="track-record-evidence-heading">
+    <div><span className="eyebrow">Evidence context</span><h2 id="track-record-evidence-heading">How to read this record</h2></div>
+    <dl>
+      <div><dt>Record type</dt><dd>Paper ledger · virtual USDC</dd></div>
+      <div><dt>Observed sample</dt><dd>{record.stats.tradeCount} fills · {record.positions.length} open positions</dd></div>
+      <div><dt>Window begins</dt><dd>{formatDate(firstCurvePoint)}</dd></div>
+      <div><dt>Equity treatment</dt><dd>Cash plus marked open positions</dd></div>
+    </dl>
+    <p>These results are a shareable simulation record, not a broker statement or a forecast. Fees are included; unsettled positions can change as the market moves.</p>
+  </section>;
+}
+
+function PublicShareButton() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      // The address bar remains a manual sharing fallback.
+    }
+  };
+  return <button className="button button-quiet public-share-button" type="button" onClick={() => void copy()}><Copy /> {copied ? "Link copied" : "Copy record link"}</button>;
 }
 
 const CURVE_WIDTH = 640;

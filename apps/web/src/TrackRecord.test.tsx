@@ -96,6 +96,10 @@ describe("TrackRecordPage", () => {
     expect(screen.getAllByText("Will the Fed hold rates in September?")).toHaveLength(2);
     expect(screen.getByText("Recent fills")).toBeInTheDocument();
     expect(screen.getByText(/Curve tracks settled cash/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "How to read this record" })).toBeInTheDocument();
+    expect(screen.getByText("2 fills · 1 open positions")).toBeInTheDocument();
+    expect(screen.getByText(/not a broker statement or a forecast/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy record link" })).toBeInTheDocument();
     // The public fetch never carries an identity: the page only receives the token.
     expect(fetchPublicTrackRecord).toHaveBeenCalledWith(expect.any(String), TOKEN);
   });
