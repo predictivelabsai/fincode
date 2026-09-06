@@ -1382,8 +1382,104 @@ input[type="checkbox"] {
   width: 13px;
 }
 
+.order-guardrails {
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.035);
+}
+
+.order-guardrails-blocked {
+  border-color: rgba(251, 191, 36, 0.42);
+  background: rgba(251, 191, 36, 0.055);
+}
+
+.order-guardrails-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.64rem;
+}
+
+.order-guardrails-heading svg {
+  width: 14px;
+  color: var(--accent);
+}
+
+.order-guardrails-heading span {
+  margin-left: auto;
+  color: var(--muted);
+  font: 0.54rem var(--mono);
+  text-transform: uppercase;
+}
+
+.order-guardrails dl {
+  margin: 8px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.order-guardrails dl div {
+  min-width: 0;
+}
+
+.order-guardrails dt,
+.cash-guard-field > span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--faint);
+  font: 0.52rem var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.order-guardrails dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font: 0.62rem var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cash-guard-field input {
+  width: 100%;
+  min-height: 31px;
+  padding: 6px 7px;
+  font: 0.65rem var(--mono);
+}
+
+.order-guardrails-note,
+.order-guardrails-warning {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 0.56rem;
+  line-height: 1.45;
+}
+
+.order-guardrails-warning {
+  display: flex;
+  gap: 5px;
+  color: #fcd34d;
+}
+
+.order-guardrails-warning svg {
+  flex: 0 0 auto;
+  width: 13px;
+}
+
 .review-check {
   margin-bottom: 10px;
+}
+
+.risk-confirmation {
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--canvas);
 }
 
 .ticket-warning,

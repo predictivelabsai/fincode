@@ -645,7 +645,7 @@ describe("routed workspace", () => {
     renderRoute("/settings");
 
     const browserStatus = (await screen.findByText("Browser IP check")).parentElement;
-    expect(browserStatus).toHaveTextContent("Trading eligible");
+    await waitFor(() => expect(browserStatus).toHaveTextContent("Trading eligible"));
     expect(screen.getByText("Country / region").parentElement).toHaveTextContent("NZ / AUK");
     expect(screen.queryByText("Gateway enforcement")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeEnabled();
@@ -662,7 +662,7 @@ describe("routed workspace", () => {
 
     renderRoute("/settings");
 
-    expect((await screen.findByText("Browser IP check")).parentElement).toHaveTextContent("Research only");
+    await waitFor(() => expect(screen.getByText("Browser IP check").parentElement).toHaveTextContent("Research only"));
     expect(screen.getByRole("button", { name: /Connect and verify wallet/i })).toBeDisabled();
     expect(screen.getByText(/New orders are unavailable in AU/i)).toBeInTheDocument();
   });
