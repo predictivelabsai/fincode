@@ -107,6 +107,16 @@ describe("AlertsSettings", () => {
     await waitFor(() => expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("saved.")));
   });
 
+  it("toggles notification event tiles through their native checkboxes", async () => {
+    const user = userEvent.setup();
+    renderAlerts(client());
+
+    const started = screen.getByRole("checkbox", { name: "STARTED" });
+    expect(started).not.toBeChecked();
+    await user.click(started);
+    expect(started).toBeChecked();
+  });
+
   it("shows a form error and skips the request when the target is invalid", async () => {
     const mocked = client();
     const user = userEvent.setup();

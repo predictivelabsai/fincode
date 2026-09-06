@@ -224,7 +224,7 @@ export function AlertsSettings(props: {
                 checked={draft.eventKinds.includes(kind)}
                 onChange={() => toggleKind(kind)}
               />
-              {kind}
+              <span>{kind}</span>
             </label>
           ))}
         </fieldset>
