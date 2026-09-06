@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  GripVertical,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -37,6 +38,9 @@ export function PaperWorkspace(props: {
   initialTemplateId?: string | null;
   onInitialTemplateConsumed?: () => void;
 }) {
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const resizingRef = useRef(false);
+  const [sideWidth, setSideWidth] = useState(() => panelWidth());
   const [portfolio, setPortfolio] = useState<PaperPortfolio | null>(null);
   const [fills, setFills] = useState<PaperFillsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +63,50 @@ export function PaperWorkspace(props: {
   const pollBusyRef = useRef(false);
   const pollFailedRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem("polytrade.paper.side-width", String(sideWidth));
+  }, [sideWidth]);
+
+  const setPanelWidthFromPointer = useCallback((clientX: number) => {
+    const bounds = gridRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const maximum = Math.min(560, Math.max(320, bounds.width * 0.48));
+    setSideWidth(clamp(bounds.right - clientX, 320, maximum));
+  }, []);
+
+  const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") return;
+    resizingRef.current = true;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("paper-resizing");
+    setPanelWidthFromPointer(event.clientX);
+  };
+
+  const resize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (resizingRef.current) setPanelWidthFromPointer(event.clientX);
+  };
+
+  const endResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizingRef.current) return;
+    resizingRef.current = false;
+    document.body.classList.remove("paper-resizing");
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const bounds = gridRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const maximum = Math.min(560, Math.max(320, bounds.width * 0.48));
+    const next = event.key === "Home" ? 320
+      : event.key === "End" ? maximum
+        : event.key === "ArrowLeft" ? sideWidth + 24
+          : event.key === "ArrowRight" ? sideWidth - 24
+            : null;
+    if (next === null) return;
+    event.preventDefault();
+    setSideWidth(clamp(next, 320, maximum));
+  };
 
   const loadFills = useCallback(async (offset: number) => {
     try {
@@ -317,7 +365,7 @@ export function PaperWorkspace(props: {
         runningBlocked={strategySnapshot?.strategy?.status === "RUNNING"}
       />
 
-      <div className="paper-grid">
+      <div className="paper-grid" ref={gridRef} style={{ "--paper-side-width": `${sideWidth}px` } as React.CSSProperties}>
         <div className="paper-data-column">
           <section className="paper-market-panel">
             <header><div><span className="eyebrow paper-eyebrow">Find a contract</span><h2>Active markets</h2></div><Activity aria-hidden="true" /></header>
@@ -345,8 +393,35 @@ export function PaperWorkspace(props: {
           </section>
 
           <PaperPositions portfolio={portfolio} />
-          <PaperFills fills={fills} offset={fillOffset} onPage={changeFillPage} />
+          <PaperStrategyRunner
+            client={props.client}
+            market={selectedMarket}
+            tokenId={selectedTokenId}
+            portfolio={portfolio}
+            snapshot={strategySnapshot}
+            template={activeTemplate}
+            onClearTemplate={clearTemplate}
+            onSnapshot={setStrategySnapshot}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
         </div>
+
+        <div
+          className="paper-grid-resizer"
+          role="separator"
+          aria-label="Resize paper workspace panels"
+          aria-orientation="vertical"
+          aria-valuemin={320}
+          aria-valuemax={560}
+          aria-valuenow={Math.round(sideWidth)}
+          tabIndex={0}
+          onPointerDown={beginResize}
+          onPointerMove={resize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onKeyDown={resizeWithKeyboard}
+        ><GripVertical aria-hidden="true" /></div>
 
         <aside className="paper-ticket-column">
           <section className="paper-ticket">
@@ -380,18 +455,7 @@ export function PaperWorkspace(props: {
             )}
             <footer>Price protection uses the preview’s worst consumed level. If the book moves beyond it, the complete order is rejected.</footer>
           </section>
-          <PaperStrategyRunner
-            client={props.client}
-            market={selectedMarket}
-            tokenId={selectedTokenId}
-            portfolio={portfolio}
-            snapshot={strategySnapshot}
-            template={activeTemplate}
-            onClearTemplate={clearTemplate}
-            onSnapshot={setStrategySnapshot}
-            onError={props.onError}
-            onNotice={props.onNotice}
-          />
+          <PaperFills fills={fills} offset={fillOffset} onPage={changeFillPage} />
           <ShareCard
             client={props.client}
             onNotice={props.onNotice}
@@ -438,7 +502,7 @@ function ExecutionTape({ quote }: { quote: PaperQuote }) {
 
 function PaperPositions({ portfolio }: { portfolio: PaperPortfolio | null }) {
   return (
-    <section className="data-section paper-table-section">
+    <section className="data-section paper-table-section paper-holdings-panel">
       <header><h2>Holdings</h2><span className="count-pill">{portfolio?.positions.length ?? 0}</span></header>
       <div className="table-scroll"><table><thead><tr><th>Market / outcome</th><th className="num">Shares</th><th className="num">Average cost</th><th className="num">Best bid</th><th className="num">Liquidation</th><th className="num">Unrealized P&amp;L</th><th>Mark</th></tr></thead><tbody>
         {portfolio?.positions.map((position) => <tr key={position.tokenId}><th>{position.marketQuestion}<small>{position.outcome}</small></th><td className="num">{shortNumber(position.shares)}</td><td className="num">{formatPrice(position.averageCost)}</td><td className="num">{formatPrice(position.bestBid)}</td><td className="num">{formatMoney(position.liquidationValue)}</td><td className={`num ${tone(position.unrealizedPnl)}`}>{formatSignedMoney(position.unrealizedPnl)}</td><td><span className={`paper-mark paper-mark-${position.markStatus}`}>{position.markStatus}</span><small>{position.markedAt ? formatTime(position.markedAt) : "Not priced"}</small></td></tr>)}
@@ -452,7 +516,7 @@ function PaperFills(props: { fills: PaperFillsResponse | null; offset: number; o
   const hasPrevious = props.offset > 0;
   const hasNext = Boolean(props.fills && props.offset + props.fills.items.length < props.fills.total);
   return (
-    <section className="data-section paper-table-section">
+    <section className="data-section paper-table-section paper-fills-panel">
       <header><h2>Paper fills</h2><div className="paper-pagination"><span className="count-pill">{props.fills?.total ?? 0}</span><button type="button" aria-label="Previous paper fills" disabled={!hasPrevious} onClick={() => props.onPage(Math.max(0, props.offset - FILL_PAGE_SIZE))}><ChevronLeft /></button><button type="button" aria-label="Next paper fills" disabled={!hasNext} onClick={() => props.onPage(props.offset + FILL_PAGE_SIZE)}><ChevronRight /></button></div></header>
       <div className="table-scroll"><table><thead><tr><th>Time</th><th>Market / outcome</th><th>Type</th><th className="num">Shares</th><th className="num">VWAP</th><th className="num">Fee</th><th className="num">Cash effect</th><th className="num">Realized P&amp;L</th></tr></thead><tbody>
         {props.fills?.items.map((fill) => <PaperFillRow key={fill.fillId} fill={fill} />)}
@@ -512,4 +576,14 @@ function formatTime(value: string): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function panelWidth(): number {
+  const stored = window.localStorage.getItem("polytrade.paper.side-width");
+  const value = stored === null ? Number.NaN : Number(stored);
+  return Number.isFinite(value) ? clamp(value, 320, 560) : 390;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
 }
